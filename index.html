@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>X și 0</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>X și 0</h1>
+      <p class="subtitle">Joc clasic pentru doi jucători</p>
+    </header>
+
+    <div class="status" id="status">Rândul lui <span class="player-x">X</span></div>
+
+    <div class="board" id="board" role="grid" aria-label="Tabla de joc X și 0">
+      <button class="cell" data-index="0" aria-label="Celulă 1"></button>
+      <button class="cell" data-index="1" aria-label="Celulă 2"></button>
+      <button class="cell" data-index="2" aria-label="Celulă 3"></button>
+      <button class="cell" data-index="3" aria-label="Celulă 4"></button>
+      <button class="cell" data-index="4" aria-label="Celulă 5"></button>
+      <button class="cell" data-index="5" aria-label="Celulă 6"></button>
+      <button class="cell" data-index="6" aria-label="Celulă 7"></button>
+      <button class="cell" data-index="7" aria-label="Celulă 8"></button>
+      <button class="cell" data-index="8" aria-label="Celulă 9"></button>
+    </div>
+
+    <div class="scoreboard">
+      <div class="score">
+        <span class="label player-x">X</span>
+        <span class="value" id="score-x">0</span>
+      </div>
+      <div class="score">
+        <span class="label">Egal</span>
+        <span class="value" id="score-draw">0</span>
+      </div>
+      <div class="score">
+        <span class="label player-o">0</span>
+        <span class="value" id="score-o">0</span>
+      </div>
+    </div>
+
+    <button class="btn-reset" id="reset-btn">Joc nou</button>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
