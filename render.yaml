@@ -1,6 +1,8 @@
 databases:
   - name: it-inventory-saas-staging-db
     region: frankfurt
+    # Free tier keeps staging card-free; it expires after 30 days.
+    plan: free
     databaseName: it_inventory_saas
     user: it_inventory_saas
 
@@ -9,6 +11,8 @@ services:
     name: it-inventory-saas-staging
     runtime: node
     region: frankfurt
+    # Free instance sleeps when idle; first request after sleep is slow.
+    plan: free
     buildCommand: cd saas && npm ci
     startCommand: cd saas && npm start
     healthCheckPath: /api/ready
