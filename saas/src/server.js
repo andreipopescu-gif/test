@@ -14,8 +14,11 @@ import {
   unauthorized,
   notFound
 } from './http.js';
-import { buildSaasImportPreview } from './import-service.js';
+import { buildSaasImportPreview, buildSaasUserImportPreview } from './import-service.js';
+import { createCatalogModel, listCatalog } from './catalog.js';
+import { assetsCsv, buildReportRows, reportTypes, rowsToCsv } from './reports.js';
 import { createImportPolicy } from '../../src/import/import-policy.js';
+import { isWarrantyExpiringWithinDays } from '../../src/utils/asset-model-label.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -182,13 +185,44 @@ async function handleApi(req, res, url) {
     }
   }
 
+  if (method === 'GET' && path === '/api/dashboard') {
+    return sendJson(res, await getDashboard(session.organizationId));
+  }
+
+  if (path === '/api/catalog' && method === 'GET') {
+    return sendJson(res, await listCatalog(db, session.organizationId));
+  }
+
+  if (path === '/api/catalog/models' && method === 'POST') {
+    requireRole(session, ['admin', 'it']);
+    const model = await createCatalogModel(db, session.organizationId, await readJson(req));
+    await addAudit(session, 'catalog.model_create', 'catalog_model', model.id, { name: model.name });
+    return sendJson(res, model, 201);
+  }
+
+  if (method === 'GET' && path === '/api/reports') {
+    return sendJson(res, reportTypes);
+  }
+
+  if (method === 'GET' && path.startsWith('/api/reports/')) {
+    const reportId = path.split('/')[3];
+    const [assets, people] = await Promise.all([
+      listAssets(session.organizationId),
+      listPeople(session.organizationId)
+    ]);
+    const rows = buildReportRows(reportId, { assets, people });
+    return sendCsv(res, rowsToCsv(rows), `report-${reportId}.csv`);
+  }
+
+  if (method === 'GET' && path === '/api/export/assets') {
+    return sendCsv(res, assetsCsv(await listAssets(session.organizationId)), 'devices.csv');
+  }
+
   if (method === 'POST' && path === '/api/import/preview') {
     requireRole(session, ['admin', 'it']);
     await enforceRateLimit(req, 'upload', 30, 60 * 60_000);
     const upload = await readMultipartForm(req, maxUploadBytes);
-    if (!upload.file.originalName.toLowerCase().endsWith('.csv')) {
-      throw badRequest('Only CSV files are supported in the SaaS MVP');
-    }
+    requireImportFile(upload);
     const preview = await createImportPreview(session, upload);
     return sendJson(res, preview, 201);
   }
@@ -196,6 +230,30 @@ async function handleApi(req, res, url) {
   if (method === 'POST' && path === '/api/import/apply') {
     requireRole(session, ['admin', 'it']);
     return sendJson(res, await applyImportBatch(session, await readJson(req)));
+  }
+
+  if (method === 'POST' && path === '/api/import/users/preview') {
+    requireRole(session, ['admin', 'it']);
+    await enforceRateLimit(req, 'upload', 30, 60 * 60_000);
+    const upload = await readMultipartForm(req, maxUploadBytes);
+    requireImportFile(upload);
+    return sendJson(res, await createUserImportPreview(session, upload), 201);
+  }
+
+  if (method === 'POST' && path === '/api/import/users/apply') {
+    requireRole(session, ['admin', 'it']);
+    return sendJson(res, await applyUserImportBatch(session, await readJson(req)));
+  }
+
+  if (method === 'POST' && path === '/api/people/merge') {
+    requireRole(session, ['admin', 'it']);
+    const body = await readJson(req);
+    const result = await mergePeople(session.organizationId, body);
+    await addAudit(session, 'person.merge', 'person', result.person?.id || '', {
+      absorbedId: result.absorbedId,
+      movedAssets: result.movedAssets
+    });
+    return sendJson(res, result);
   }
 
   if (path === '/api/people') {
@@ -232,6 +290,10 @@ async function handleApi(req, res, url) {
       await addAudit(session, 'asset.create', 'asset', asset.id);
       return sendJson(res, asset, 201);
     }
+  }
+
+  if (method === 'GET' && path.startsWith('/api/assets/')) {
+    return sendJson(res, await getAssetDetail(session.organizationId, path.split('/')[3]));
   }
 
   if (method === 'PUT' && path.startsWith('/api/assets/')) {
@@ -720,13 +782,44 @@ function hashToken(token) {
 }
 
 async function listPeople(organizationId) {
-  return db.all(`
+  return (await db.all(`
     SELECT id, first_name AS "firstName", last_name AS "lastName", email, department,
-           role_title AS role, status, created_at AS "createdAt", updated_at AS "updatedAt"
+           role_title AS role, status, external_ids_json AS "externalIdsJson",
+           created_at AS "createdAt", updated_at AS "updatedAt"
     FROM people
     WHERE organization_id = ?
     ORDER BY LOWER(last_name), LOWER(first_name)
-  `, [organizationId]);
+  `, [organizationId])).map((row) => ({
+    ...row,
+    externalIds: normalizePersonExternalIds(parseJson(row.externalIdsJson, {})),
+    externalIdsJson: undefined
+  }));
+}
+
+// Identity columns an MDM export can carry for one person. Alternate addresses
+// keep a renamed employee from being imported twice.
+function normalizePersonExternalIds(input = {}) {
+  const value = input && typeof input === 'object' ? input : {};
+  return {
+    upn: clean(value.upn).toLowerCase(),
+    jamfUsername: clean(value.jamfUsername),
+    entraObjectId: clean(value.entraObjectId),
+    alternateEmails: [...new Set(
+      (Array.isArray(value.alternateEmails) ? value.alternateEmails : [])
+        .map((email) => clean(email).toLowerCase())
+        .filter(Boolean)
+    )]
+  };
+}
+
+function normalizeAssetExternalIds(input = {}) {
+  const value = input && typeof input === 'object' ? input : {};
+  const result = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const cleaned = clean(raw);
+    if (cleaned) result[clean(key)] = cleaned;
+  }
+  return result;
 }
 
 async function createPerson(organizationId, input) {
@@ -737,8 +830,9 @@ async function createPerson(organizationId, input) {
   const id = randomUUID();
   await db.run(`
     INSERT INTO people (
-      id, organization_id, first_name, last_name, email, department, role_title, status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, organization_id, first_name, last_name, email, department, role_title, status,
+      external_ids_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
     id,
     organizationId,
@@ -748,6 +842,7 @@ async function createPerson(organizationId, input) {
     clean(input.department),
     clean(input.role),
     input.status === 'inactive' ? 'inactive' : 'active',
+    JSON.stringify(normalizePersonExternalIds(input.externalIds)),
     now,
     now
   ]);
@@ -768,10 +863,17 @@ async function updatePerson(organizationId, id, input) {
     ? existing.status
     : (input.status === 'inactive' ? 'inactive' : 'active');
 
+  const externalIds = input.externalIds === undefined
+    ? normalizePersonExternalIds(parseJson(existing.external_ids_json, {}))
+    : normalizePersonExternalIds({
+        ...parseJson(existing.external_ids_json, {}),
+        ...input.externalIds
+      });
+
   await db.run(`
     UPDATE people
     SET first_name = ?, last_name = ?, email = ?, department = ?, role_title = ?,
-        status = ?, updated_at = ?
+        status = ?, external_ids_json = ?, updated_at = ?
     WHERE id = ? AND organization_id = ?
   `, [
     firstName,
@@ -780,6 +882,7 @@ async function updatePerson(organizationId, id, input) {
     pick(input.department, existing.department),
     pick(input.role, existing.role_title),
     status,
+    JSON.stringify(externalIds),
     new Date().toISOString(),
     id,
     organizationId
@@ -795,16 +898,280 @@ async function deletePerson(organizationId, id) {
   if (!result.changes) throw notFound('Person not found');
 }
 
+/**
+ * Imports from two systems routinely create the same employee twice (a UPN in
+ * one export, a personal mailbox in the other). Merging keeps one record,
+ * moves the devices and assignment history onto it, and files every address
+ * the absorbed record carried so a later import matches instead of splitting
+ * the person again.
+ */
+async function mergePeople(organizationId, input) {
+  const keepId = clean(input.keepId);
+  const absorbId = clean(input.absorbId);
+  if (!keepId || !absorbId) throw badRequest('keepId and absorbId are required');
+  if (keepId === absorbId) throw badRequest('keepId and absorbId must differ');
+
+  const [keep, absorb] = await Promise.all([
+    db.get('SELECT * FROM people WHERE id = ? AND organization_id = ?', [keepId, organizationId]),
+    db.get('SELECT * FROM people WHERE id = ? AND organization_id = ?', [absorbId, organizationId])
+  ]);
+  if (!keep || !absorb) throw notFound('Person not found');
+
+  const keepIds = normalizePersonExternalIds(parseJson(keep.external_ids_json, {}));
+  const absorbIds = normalizePersonExternalIds(parseJson(absorb.external_ids_json, {}));
+  const merged = normalizePersonExternalIds({
+    upn: keepIds.upn || absorbIds.upn,
+    jamfUsername: keepIds.jamfUsername || absorbIds.jamfUsername,
+    entraObjectId: keepIds.entraObjectId || absorbIds.entraObjectId,
+    alternateEmails: [
+      ...keepIds.alternateEmails,
+      ...absorbIds.alternateEmails,
+      absorbIds.upn,
+      clean(absorb.email).toLowerCase()
+    ].filter((email) => email && email !== clean(keep.email).toLowerCase())
+  });
+
+  const now = new Date().toISOString();
+  let movedAssets = 0;
+  await db.transaction(async (tx) => {
+    movedAssets = (await tx.run(
+      'UPDATE assets SET person_id = ?, updated_at = ? WHERE person_id = ? AND organization_id = ?',
+      [keepId, now, absorbId, organizationId]
+    )).changes;
+    await tx.run(
+      'UPDATE asset_assignments SET person_id = ? WHERE person_id = ? AND organization_id = ?',
+      [keepId, absorbId, organizationId]
+    );
+    await tx.run(`
+      UPDATE people
+      SET email = ?, department = ?, role_title = ?, external_ids_json = ?, updated_at = ?
+      WHERE id = ? AND organization_id = ?
+    `, [
+      clean(keep.email) || clean(absorb.email),
+      clean(keep.department) || clean(absorb.department),
+      clean(keep.role_title) || clean(absorb.role_title),
+      JSON.stringify(merged),
+      now,
+      keepId,
+      organizationId
+    ]);
+    await tx.run('DELETE FROM people WHERE id = ? AND organization_id = ?', [absorbId, organizationId]);
+  });
+
+  const person = (await listPeople(organizationId)).find((item) => item.id === keepId);
+  return { ok: true, person, movedAssets, absorbedId: absorbId };
+}
+
+async function getDashboard(organizationId) {
+  const [assets, people] = await Promise.all([
+    listAssets(organizationId),
+    listPeople(organizationId)
+  ]);
+
+  const recentAssignments = (await db.all(`
+    SELECT s.id, s.started_at AS "startedAt", s.ended_at AS "endedAt", s.end_reason AS "endReason",
+           s.source, s.asset_id AS "assetId", s.person_id AS "personId",
+           a.asset_tag AS "assetTag", a.serial_number AS "serialNumber", a.model_name AS "modelName",
+           p.first_name AS "firstName", p.last_name AS "lastName", p.email
+    FROM asset_assignments s
+    JOIN assets a ON a.id = s.asset_id AND a.organization_id = s.organization_id
+    LEFT JOIN people p ON p.id = s.person_id AND p.organization_id = s.organization_id
+    WHERE s.organization_id = ?
+    ORDER BY s.started_at DESC, s.id DESC
+    LIMIT 10
+  `, [organizationId])).map((row) => ({
+    id: row.id,
+    assetId: row.assetId,
+    assetTag: row.assetTag,
+    serialNumber: row.serialNumber,
+    modelName: row.modelName,
+    personId: row.personId,
+    personName: [row.firstName, row.lastName].filter(Boolean).join(' ').trim(),
+    personEmail: row.email || '',
+    startedAt: row.startedAt,
+    endedAt: row.endedAt,
+    endReason: row.endReason,
+    source: row.source
+  }));
+
+  const warrantyExpiring30 = assets.filter((asset) => isWarrantyExpiringWithinDays(asset.warrantyEndsOn, 30));
+  const warrantyExpiring90 = assets.filter((asset) => isWarrantyExpiringWithinDays(asset.warrantyEndsOn, 90));
+  const activePeople = people.filter((person) => person.status !== 'inactive');
+
+  return {
+    counts: {
+      assets: assets.length,
+      people: people.length,
+      assignedAssets: assets.filter((asset) => asset.personId).length,
+      peopleWithoutDevice: activePeople.filter(
+        (person) => !assets.some((asset) => asset.personId === person.id)
+      ).length,
+      missingFromMdm: assets.filter((asset) => asset.importMeta?.missingFromLastImport).length
+    },
+    assets: {
+      byStatus: countBy(assets, (asset) => asset.status || 'unknown'),
+      byCategory: countBy(assets, (asset) => asset.category || 'Uncategorized'),
+      byModel: countBy(assets, (asset) => asset.modelName || 'Unknown')
+    },
+    people: {
+      total: people.length,
+      active: activePeople.length,
+      inactive: people.length - activePeople.length,
+      byDepartment: countBy(people, (person) => person.department || 'No department'),
+      byStatus: countBy(people, (person) => person.status || 'active')
+    },
+    warranty: {
+      expiring30: warrantyExpiring30.length,
+      expiring90: warrantyExpiring90.length,
+      soonest: warrantyExpiring90
+        .slice()
+        .sort((a, b) => String(a.warrantyEndsOn).localeCompare(String(b.warrantyEndsOn)))
+        .slice(0, 10)
+        .map((asset) => ({
+          id: asset.id,
+          assetTag: asset.assetTag,
+          serialNumber: asset.serialNumber,
+          modelName: asset.modelName,
+          warrantyEndsOn: asset.warrantyEndsOn
+        }))
+    },
+    recentAssignments
+  };
+}
+
+function countBy(items, getLabel) {
+  const counts = new Map();
+  for (const item of items) {
+    const label = clean(getLabel(item)) || 'Unknown';
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+const assetColumns = `
+  a.id, a.asset_tag AS "assetTag", a.serial_number AS "serialNumber", a.model_name AS "modelName",
+  a.model_id AS "modelId", a.category, a.brand, a.ram_gb AS "ramGb", a.storage_gb AS "storageGb",
+  a.cpu, a.imei, a.operating_system AS "operatingSystem", a.warranty_ends_on AS "warrantyEndsOn",
+  a.purchased_on AS "purchasedOn", a.vendor, a.notes, a.enrolled_at AS "enrolledAt",
+  a.last_enrolled_at AS "lastEnrolledAt", a.status, a.person_id AS "personId",
+  a.external_ids_json AS "externalIdsJson", a.import_meta_json AS "importMetaJson",
+  a.created_at AS "createdAt", a.updated_at AS "updatedAt",
+  p.first_name AS "personFirstName", p.last_name AS "personLastName",
+  p.email AS "personEmail", p.department AS "personDepartment"
+`;
+
 async function listAssets(organizationId) {
-  return db.all(`
-    SELECT a.id, a.asset_tag AS "assetTag", a.serial_number AS "serialNumber", a.model_name AS "modelName",
-           a.status, a.person_id AS "personId", a.created_at AS "createdAt", a.updated_at AS "updatedAt",
-           p.first_name AS "personFirstName", p.last_name AS "personLastName"
+  const rows = await db.all(`
+    SELECT ${assetColumns}
     FROM assets a
     LEFT JOIN people p ON p.id = a.person_id AND p.organization_id = a.organization_id
     WHERE a.organization_id = ?
     ORDER BY LOWER(a.asset_tag)
   `, [organizationId]);
+  return rows.map(presentAsset);
+}
+
+function presentAsset(row) {
+  return {
+    ...row,
+    externalIds: parseJson(row.externalIdsJson, {}),
+    importMeta: parseJson(row.importMetaJson, {}),
+    externalIdsJson: undefined,
+    importMetaJson: undefined
+  };
+}
+
+/** Asset detail with its person, full assignment history and import provenance. */
+async function getAssetDetail(organizationId, id) {
+  const row = await db.get(`
+    SELECT ${assetColumns}
+    FROM assets a
+    LEFT JOIN people p ON p.id = a.person_id AND p.organization_id = a.organization_id
+    WHERE a.organization_id = ? AND a.id = ?
+  `, [organizationId, id]);
+  if (!row) throw notFound('Asset not found');
+
+  const assignments = await db.all(`
+    SELECT s.id, s.person_id AS "personId", s.started_at AS "startedAt", s.ended_at AS "endedAt",
+           s.end_reason AS "endReason", s.source,
+           p.first_name AS "firstName", p.last_name AS "lastName", p.email
+    FROM asset_assignments s
+    LEFT JOIN people p ON p.id = s.person_id AND p.organization_id = s.organization_id
+    WHERE s.asset_id = ? AND s.organization_id = ?
+    ORDER BY s.started_at DESC, s.id DESC
+  `, [id, organizationId]);
+
+  const asset = presentAsset(row);
+  const history = assignments.map((item) => ({
+    id: item.id,
+    personId: item.personId,
+    person: item.personId
+      ? { id: item.personId, firstName: item.firstName, lastName: item.lastName, email: item.email }
+      : null,
+    startedAt: item.startedAt,
+    endedAt: item.endedAt,
+    endReason: item.endReason,
+    source: item.source
+  }));
+  return {
+    ...asset,
+    person: row.personId
+      ? {
+          id: row.personId,
+          firstName: row.personFirstName,
+          lastName: row.personLastName,
+          email: row.personEmail,
+          department: row.personDepartment
+        }
+      : null,
+    model: row.modelId ? await db.get(
+      'SELECT id, name FROM catalog_models WHERE id = ? AND organization_id = ?',
+      [row.modelId, organizationId]
+    ) : null,
+    assignments: history,
+    currentAssignment: history.find((item) => !item.endedAt) || null
+  };
+}
+
+// Rich hardware fields follow the same partial-update contract as the core
+// ones: an absent key keeps the stored value, an empty string clears it.
+const assetRichFields = [
+  ['model_id', 'modelId', clean],
+  ['category', 'category', clean],
+  ['brand', 'brand', clean],
+  ['ram_gb', 'ramGb', numberOrNull],
+  ['storage_gb', 'storageGb', numberOrNull],
+  ['cpu', 'cpu', clean],
+  ['imei', 'imei', clean],
+  ['operating_system', 'operatingSystem', clean],
+  ['warranty_ends_on', 'warrantyEndsOn', clean],
+  ['purchased_on', 'purchasedOn', clean],
+  ['vendor', 'vendor', clean],
+  ['notes', 'notes', clean],
+  ['enrolled_at', 'enrolledAt', clean],
+  ['last_enrolled_at', 'lastEnrolledAt', clean]
+];
+
+function richAssetValues(input, existing = {}) {
+  return assetRichFields.map(([column, field, normalize]) =>
+    input[field] === undefined ? (existing[column] ?? null) : (normalize(input[field]) || null)
+  );
+}
+
+function numberOrNull(value) {
+  const number = Number(String(value ?? '').replace(/[^0-9.]/g, ''));
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : null;
+}
+
+async function requireOwnModel(organizationId, modelId) {
+  if (!modelId) return;
+  const model = await db.get(
+    'SELECT id FROM catalog_models WHERE id = ? AND organization_id = ?',
+    [modelId, organizationId]
+  );
+  if (!model) throw badRequest('Model does not belong to this organization');
 }
 
 async function createAsset(organizationId, input) {
@@ -820,12 +1187,15 @@ async function createAsset(organizationId, input) {
     `, [personId, organizationId]);
     if (!person) throw badRequest('Person does not belong to this organization');
   }
+  await requireOwnModel(organizationId, clean(input.modelId));
   try {
     await db.transaction(async (tx) => {
       await tx.run(`
         INSERT INTO assets (
-          id, organization_id, asset_tag, serial_number, model_name, status, person_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          id, organization_id, asset_tag, serial_number, model_name, status, person_id,
+          external_ids_json, created_at, updated_at,
+          ${assetRichFields.map(([column]) => column).join(', ')}
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${assetRichFields.map(() => '?').join(', ')})
       `, [
         id,
         organizationId,
@@ -834,8 +1204,10 @@ async function createAsset(organizationId, input) {
         clean(input.modelName),
         personId ? 'assigned' : normalizeStatus(input.status),
         personId,
+        JSON.stringify(normalizeAssetExternalIds(input.externalIds)),
         now,
-        now
+        now,
+        ...richAssetValues(input)
       ]);
       if (personId) {
         await openAssignment(tx, organizationId, id, personId, now, 'manual');
@@ -880,12 +1252,19 @@ async function updateAsset(organizationId, id, input) {
   else if (input.status !== undefined) status = normalizeStatus(input.status);
   else status = existing.person_id ? 'in_stock' : existing.status;
 
+  if (input.modelId !== undefined) await requireOwnModel(organizationId, clean(input.modelId));
+  const externalIds = input.externalIds === undefined
+    ? parseJson(existing.external_ids_json, {})
+    : { ...parseJson(existing.external_ids_json, {}), ...normalizeAssetExternalIds(input.externalIds) };
+
   const now = new Date().toISOString();
   try {
     await db.transaction(async (tx) => {
       await tx.run(`
         UPDATE assets
-        SET asset_tag = ?, serial_number = ?, model_name = ?, status = ?, person_id = ?, updated_at = ?
+        SET asset_tag = ?, serial_number = ?, model_name = ?, status = ?, person_id = ?,
+            external_ids_json = ?, updated_at = ?,
+            ${assetRichFields.map(([column]) => `${column} = ?`).join(', ')}
         WHERE id = ? AND organization_id = ?
       `, [
         assetTag,
@@ -893,7 +1272,9 @@ async function updateAsset(organizationId, id, input) {
         pick(input.modelName, existing.model_name),
         status,
         personId,
+        JSON.stringify(externalIds),
         now,
+        ...richAssetValues(input, existing),
         id,
         organizationId
       ]);
@@ -957,8 +1338,8 @@ async function createImportPreview(session, upload) {
   await db.transaction(async (tx) => {
     await tx.run(`
       INSERT INTO import_batches (
-        id, organization_id, user_id, source, file_name, status, summary_json, policy_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, 'preview', ?, ?, ?)
+        id, organization_id, user_id, kind, source, file_name, status, summary_json, policy_json, created_at
+      ) VALUES (?, ?, ?, 'devices', ?, ?, 'preview', ?, ?, ?)
     `, [
       batchId,
       session.organizationId,
@@ -1020,13 +1401,15 @@ async function applyImportBatch(session, input) {
     ? new Set(input.includeRowIds.map(clean))
     : null;
   const selected = rows.filter((row) =>
-    row.action !== 'skip' && (!includeIds || includeIds.has(row.id))
+    !['skip', 'needs_review'].includes(row.action) && (!includeIds || includeIds.has(row.id))
   );
   const now = new Date().toISOString();
   let created = 0;
   let updated = 0;
   let peopleCreated = 0;
+  let missingFromImport = 0;
   const source = batch.source || 'import';
+  const touchedAssetIds = new Set();
 
   await db.transaction(async (tx) => {
     for (const stored of selected) {
@@ -1076,7 +1459,8 @@ async function applyImportBatch(session, input) {
         await tx.run(`
           UPDATE assets
           SET asset_tag = ?, model_name = ?, status = ?, person_id = ?,
-              external_ids_json = ?, import_meta_json = ?, updated_at = ?
+              external_ids_json = ?, import_meta_json = ?, updated_at = ?,
+              ${importedAssetFields.map(([column]) => `${column} = COALESCE(?, ${column})`).join(', ')}
           WHERE id = ? AND organization_id = ?
         `, [
           row.assetTag,
@@ -1086,9 +1470,11 @@ async function applyImportBatch(session, input) {
           JSON.stringify(mergeJson(existing.external_ids_json, externalIds)),
           JSON.stringify(importMeta),
           now,
+          ...importedAssetValues(row),
           existing.id,
           session.organizationId
         ]);
+        touchedAssetIds.add(existing.id);
         if (previousPersonId !== personId) {
           await closeOpenAssignment(tx, existing.id, now, `Import ${source}`);
           if (personId) {
@@ -1101,8 +1487,9 @@ async function applyImportBatch(session, input) {
         await tx.run(`
           INSERT INTO assets (
             id, organization_id, asset_tag, serial_number, model_name,
-            status, person_id, external_ids_json, import_meta_json, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            status, person_id, external_ids_json, import_meta_json, created_at, updated_at,
+            ${importedAssetFields.map(([column]) => column).join(', ')}
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${importedAssetFields.map(() => '?').join(', ')})
         `, [
           assetId,
           session.organizationId,
@@ -1114,14 +1501,24 @@ async function applyImportBatch(session, input) {
           JSON.stringify(externalIds),
           JSON.stringify(importMeta),
           now,
-          now
+          now,
+          ...importedAssetValues(row)
         ]);
+        touchedAssetIds.add(assetId);
         if (personId) {
           await openAssignment(tx, session.organizationId, assetId, personId, now, source);
         }
         created += 1;
       }
     }
+
+    missingFromImport = await markMissingFromImport(
+      tx,
+      session.organizationId,
+      source,
+      touchedAssetIds,
+      now
+    );
 
     await tx.run(`
       UPDATE import_batches
@@ -1133,6 +1530,7 @@ async function applyImportBatch(session, input) {
         created,
         updated,
         peopleCreated,
+        missingFromImport,
         skipped: rows.length - selected.length
       }),
       batchId,
@@ -1149,9 +1547,226 @@ async function applyImportBatch(session, input) {
     created,
     updated,
     peopleCreated,
+    missingFromImport,
     skipped: rows.length - selected.length
   };
   await addAudit(session, 'import.apply', 'import_batch', batchId, summary);
+  return { ok: true, batchId, summary };
+}
+
+// Hardware fields the mappers can fill in. COALESCE on update keeps a value a
+// human typed when the export has nothing to say about that column.
+const importedAssetFields = [
+  ['category', 'category'],
+  ['operating_system', 'operatingSystem'],
+  ['ram_gb', 'ramGb'],
+  ['storage_gb', 'storageGb'],
+  ['cpu', 'cpu'],
+  ['imei', 'imei'],
+  ['enrolled_at', 'enrolledAt'],
+  ['last_enrolled_at', 'lastEnrolledAt'],
+  ['notes', 'notes']
+];
+
+function importedAssetValues(row) {
+  return importedAssetFields.map(([, field]) => {
+    const value = row[field];
+    if (value === undefined || value === null || value === '') return null;
+    return typeof value === 'number' ? value : clean(value);
+  });
+}
+
+/**
+ * A device that an MDM stopped reporting is not deleted: it is flagged, so the
+ * "missing from MDM" report can show what left the fleet without anyone
+ * telling IT. Only assets last seen through the same source are considered,
+ * and retired hardware is left alone.
+ */
+async function markMissingFromImport(tx, organizationId, source, touchedAssetIds, now) {
+  const candidates = await tx.all(`
+    SELECT id, import_meta_json AS "importMetaJson"
+    FROM assets
+    WHERE organization_id = ? AND status <> 'retired'
+  `, [organizationId]);
+
+  let missing = 0;
+  for (const candidate of candidates) {
+    const meta = parseJson(candidate.importMetaJson, {});
+    if (clean(meta.source).toLowerCase() !== clean(source).toLowerCase()) continue;
+    if (touchedAssetIds.has(candidate.id)) continue;
+    missing += 1;
+    if (meta.missingFromLastImport) continue;
+    await tx.run(
+      'UPDATE assets SET import_meta_json = ?, updated_at = ? WHERE id = ? AND organization_id = ?',
+      [
+        JSON.stringify({ ...meta, missingFromLastImport: true, missingDetectedAt: now }),
+        now,
+        candidate.id,
+        organizationId
+      ]
+    );
+  }
+  return missing;
+}
+
+async function createUserImportPreview(session, upload) {
+  const [existingPeople, policy] = await Promise.all([
+    listPeople(session.organizationId),
+    loadImportPolicy(session.organizationId)
+  ]);
+  const preview = buildSaasUserImportPreview({
+    buffer: upload.file.buffer,
+    fileName: upload.file.originalName,
+    source: upload.fields.source || 'auto',
+    existingPeople,
+    policy
+  });
+
+  const batchId = randomUUID();
+  const now = new Date().toISOString();
+  await db.transaction(async (tx) => {
+    await tx.run(`
+      INSERT INTO import_batches (
+        id, organization_id, user_id, kind, source, file_name, status, summary_json, policy_json, created_at
+      ) VALUES (?, ?, ?, 'users', ?, ?, 'preview', ?, '{}', ?)
+    `, [
+      batchId,
+      session.organizationId,
+      session.userId,
+      preview.source,
+      preview.fileName,
+      JSON.stringify(preview.summary),
+      now
+    ]);
+    const storedRows = [];
+    for (const row of preview.rows) {
+      const id = randomUUID();
+      await tx.run(`
+        INSERT INTO import_rows (
+          id, batch_id, organization_id, row_key, action, data_json, warnings_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        id,
+        batchId,
+        session.organizationId,
+        row.rowKey,
+        row.action,
+        JSON.stringify(row),
+        JSON.stringify(row.warnings),
+        now
+      ]);
+      storedRows.push({ ...row, id });
+    }
+    preview.rows = storedRows;
+  });
+
+  await addAudit(session, 'import.users.preview', 'import_batch', batchId, {
+    source: preview.source,
+    fileName: preview.fileName,
+    summary: preview.summary
+  });
+  return { ...preview, batchId };
+}
+
+async function applyUserImportBatch(session, input) {
+  const batchId = clean(input.batchId);
+  if (!batchId) throw badRequest('batchId is required');
+  const batch = await db.get(
+    'SELECT * FROM import_batches WHERE id = ? AND organization_id = ?',
+    [batchId, session.organizationId]
+  );
+  if (!batch) throw notFound('Import batch not found');
+  if (batch.kind !== 'users') throw badRequest('Import batch does not contain users');
+  if (batch.status !== 'preview') throw badRequest('Import batch was already applied or cancelled');
+
+  const rows = await db.all(`
+    SELECT id, action, data_json AS "dataJson"
+    FROM import_rows
+    WHERE batch_id = ? AND organization_id = ?
+    ORDER BY created_at, id
+  `, [batchId, session.organizationId]);
+  const includeIds = Array.isArray(input.includeRowIds)
+    ? new Set(input.includeRowIds.map(clean))
+    : null;
+  const selected = rows.filter((row) =>
+    row.action !== 'skip' && (!includeIds || includeIds.has(row.id))
+  );
+
+  const now = new Date().toISOString();
+  let created = 0;
+  let updated = 0;
+
+  await db.transaction(async (tx) => {
+    for (const stored of selected) {
+      const row = JSON.parse(stored.dataJson);
+      const email = clean(row.email).toLowerCase();
+      if (!email) continue;
+      const existing = await tx.get(`
+        SELECT id, external_ids_json AS "externalIdsJson"
+        FROM people
+        WHERE organization_id = ? AND LOWER(email) = LOWER(?)
+        LIMIT 1
+      `, [session.organizationId, email]);
+
+      if (existing) {
+        await tx.run(`
+          UPDATE people
+          SET first_name = COALESCE(?, first_name), last_name = COALESCE(?, last_name),
+              department = COALESCE(?, department), role_title = COALESCE(?, role_title),
+              status = ?, external_ids_json = ?, updated_at = ?
+          WHERE id = ? AND organization_id = ?
+        `, [
+          clean(row.firstName) || null,
+          clean(row.lastName) || null,
+          clean(row.department) || null,
+          clean(row.role) || null,
+          row.status === 'inactive' ? 'inactive' : 'active',
+          JSON.stringify(normalizePersonExternalIds({
+            ...parseJson(existing.externalIdsJson, {}),
+            ...row.externalIds
+          })),
+          now,
+          existing.id,
+          session.organizationId
+        ]);
+        updated += 1;
+      } else {
+        await tx.run(`
+          INSERT INTO people (
+            id, organization_id, first_name, last_name, email, department, role_title,
+            status, external_ids_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          randomUUID(),
+          session.organizationId,
+          clean(row.firstName) || 'Unknown',
+          clean(row.lastName) || '-',
+          email,
+          clean(row.department),
+          clean(row.role),
+          row.status === 'inactive' ? 'inactive' : 'active',
+          JSON.stringify(normalizePersonExternalIds(row.externalIds)),
+          now,
+          now
+        ]);
+        created += 1;
+      }
+    }
+
+    await tx.run(`
+      UPDATE import_batches
+      SET status = 'applied', applied_at = ?, summary_json = ?
+      WHERE id = ? AND organization_id = ?
+    `, [
+      now,
+      JSON.stringify({ created, updated, skipped: rows.length - selected.length }),
+      batchId,
+      session.organizationId
+    ]);
+  });
+
+  const summary = { created, updated, skipped: rows.length - selected.length };
+  await addAudit(session, 'import.users.apply', 'import_batch', batchId, summary);
   return { ok: true, batchId, summary };
 }
 
@@ -1347,6 +1962,24 @@ async function serveStatic(req, res, url) {
       return;
     }
     throw error;
+  }
+}
+
+function sendCsv(res, csv, fileName) {
+  res.writeHead(200, {
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="${fileName}"`,
+    'Cache-Control': 'no-store'
+  });
+  res.end(csv);
+}
+
+// Intune hands out a ZIP that wraps the inventory CSV; the shared reader pulls
+// the first CSV out of it, so both extensions are accepted here.
+function requireImportFile(upload) {
+  const name = upload.file.originalName.toLowerCase();
+  if (!name.endsWith('.csv') && !name.endsWith('.zip')) {
+    throw badRequest('Only CSV or ZIP files are supported');
   }
 }
 

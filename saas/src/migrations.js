@@ -107,6 +107,41 @@ const commonTables = `
   CREATE INDEX IF NOT EXISTS idx_import_rows_batch ON import_rows(batch_id);
 `;
 
+// Seeded lazily per organization from seed/models.json, never globally: one
+// tenant's hardware catalogue must not leak into another's pickers.
+const catalogTables = `
+  CREATE TABLE IF NOT EXISTS catalog_categories (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    name TEXT NOT NULL,
+    UNIQUE (organization_id, key)
+  );
+
+  CREATE TABLE IF NOT EXISTS catalog_brands (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    category_id TEXT NOT NULL REFERENCES catalog_categories(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    name TEXT NOT NULL,
+    UNIQUE (organization_id, category_id, key)
+  );
+
+  CREATE TABLE IF NOT EXISTS catalog_models (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    brand_id TEXT NOT NULL REFERENCES catalog_brands(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    name TEXT NOT NULL,
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    UNIQUE (organization_id, brand_id, key)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_catalog_categories_org ON catalog_categories(organization_id);
+  CREATE INDEX IF NOT EXISTS idx_catalog_brands_org ON catalog_brands(organization_id);
+  CREATE INDEX IF NOT EXISTS idx_catalog_models_org ON catalog_models(organization_id);
+`;
+
 export const sqliteMigrations = [
   {
     version: 1,
@@ -182,6 +217,79 @@ export const sqliteMigrations = [
         count INTEGER NOT NULL,
         PRIMARY KEY (bucket, client_key, window_start)
       );
+    `
+  },
+  {
+    // SQLite cannot widen a CHECK constraint in place, so the two tables whose
+    // vocabulary grew (import actions, import kinds) are rebuilt. Both are
+    // working tables for the import wizard, so copying them is cheap.
+    version: 5,
+    sql: `
+      ${catalogTables}
+
+      ALTER TABLE people ADD COLUMN external_ids_json TEXT NOT NULL DEFAULT '{}';
+
+      ALTER TABLE assets ADD COLUMN model_id TEXT REFERENCES catalog_models(id) ON DELETE SET NULL;
+      ALTER TABLE assets ADD COLUMN category TEXT;
+      ALTER TABLE assets ADD COLUMN brand TEXT;
+      ALTER TABLE assets ADD COLUMN ram_gb INTEGER;
+      ALTER TABLE assets ADD COLUMN storage_gb INTEGER;
+      ALTER TABLE assets ADD COLUMN cpu TEXT;
+      ALTER TABLE assets ADD COLUMN imei TEXT;
+      ALTER TABLE assets ADD COLUMN operating_system TEXT;
+      ALTER TABLE assets ADD COLUMN warranty_ends_on TEXT;
+      ALTER TABLE assets ADD COLUMN purchased_on TEXT;
+      ALTER TABLE assets ADD COLUMN vendor TEXT;
+      ALTER TABLE assets ADD COLUMN notes TEXT;
+      ALTER TABLE assets ADD COLUMN enrolled_at TEXT;
+      ALTER TABLE assets ADD COLUMN last_enrolled_at TEXT;
+
+      CREATE TABLE import_batches_v5 (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL DEFAULT 'devices' CHECK (kind IN ('devices', 'users')),
+        source TEXT NOT NULL CHECK (source IN ('intune', 'jamf', 'entra', 'intune_users')),
+        file_name TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('preview', 'applied', 'cancelled')),
+        summary_json TEXT NOT NULL,
+        policy_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        applied_at TEXT
+      );
+      INSERT INTO import_batches_v5 (
+        id, organization_id, user_id, kind, source, file_name, status,
+        summary_json, policy_json, created_at, applied_at
+      )
+      SELECT id, organization_id, user_id, 'devices', source, file_name, status,
+             summary_json, policy_json, created_at, applied_at
+      FROM import_batches;
+
+      CREATE TABLE import_rows_v5 (
+        id TEXT PRIMARY KEY,
+        batch_id TEXT NOT NULL REFERENCES import_batches_v5(id) ON DELETE CASCADE,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        row_key TEXT NOT NULL,
+        action TEXT NOT NULL CHECK (
+          action IN ('create', 'update', 'reassign', 'skip', 'needs_review')
+        ),
+        data_json TEXT NOT NULL,
+        warnings_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        UNIQUE (batch_id, row_key)
+      );
+      INSERT INTO import_rows_v5 (
+        id, batch_id, organization_id, row_key, action, data_json, warnings_json, created_at
+      )
+      SELECT id, batch_id, organization_id, row_key, action, data_json, warnings_json, created_at
+      FROM import_rows;
+
+      DROP TABLE import_rows;
+      DROP TABLE import_batches;
+      ALTER TABLE import_batches_v5 RENAME TO import_batches;
+      ALTER TABLE import_rows_v5 RENAME TO import_rows;
+      CREATE INDEX IF NOT EXISTS idx_import_batches_org ON import_batches(organization_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_import_rows_batch ON import_rows(batch_id);
     `
   }
 ];
@@ -260,6 +368,41 @@ export const postgresMigrations = [
         count INTEGER NOT NULL,
         PRIMARY KEY (bucket, client_key, window_start)
       );
+    `
+  },
+  {
+    version: 5,
+    sql: `
+      ${catalogTables}
+
+      ALTER TABLE people ADD COLUMN IF NOT EXISTS external_ids_json TEXT NOT NULL DEFAULT '{}';
+
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS model_id TEXT REFERENCES catalog_models(id) ON DELETE SET NULL;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS category TEXT;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS brand TEXT;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS ram_gb INTEGER;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS storage_gb INTEGER;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS cpu TEXT;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS imei TEXT;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS operating_system TEXT;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS warranty_ends_on TEXT;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS purchased_on TEXT;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS vendor TEXT;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS notes TEXT;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS enrolled_at TEXT;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS last_enrolled_at TEXT;
+
+      ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'devices';
+      ALTER TABLE import_batches DROP CONSTRAINT IF EXISTS import_batches_kind_check;
+      ALTER TABLE import_batches ADD CONSTRAINT import_batches_kind_check
+        CHECK (kind IN ('devices', 'users'));
+      ALTER TABLE import_batches DROP CONSTRAINT IF EXISTS import_batches_source_check;
+      ALTER TABLE import_batches ADD CONSTRAINT import_batches_source_check
+        CHECK (source IN ('intune', 'jamf', 'entra', 'intune_users'));
+
+      ALTER TABLE import_rows DROP CONSTRAINT IF EXISTS import_rows_action_check;
+      ALTER TABLE import_rows ADD CONSTRAINT import_rows_action_check
+        CHECK (action IN ('create', 'update', 'reassign', 'skip', 'needs_review'));
     `
   }
 ];
