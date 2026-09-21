@@ -22,9 +22,9 @@ test('jwt roundtrip', () => {
 
 test('sqlite schema creates organizations table', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'saas-db-'));
-  const db = openDatabase(join(dir, 't.sqlite'));
-  const row = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='organizations'`).get();
+  const db = await openDatabase({ dbPath: join(dir, 't.sqlite'), databaseUrl: '' });
+  const row = await db.get(`SELECT name FROM sqlite_master WHERE type='table' AND name='organizations'`);
   assert.equal(row.name, 'organizations');
-  db.close();
+  await db.close();
   await rm(dir, { recursive: true, force: true });
 });

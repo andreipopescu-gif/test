@@ -2,73 +2,140 @@ import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { postgresMigrations, sqliteMigrations } from './migrations.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const defaultPath = join(__dirname, '..', 'data', 'saas.sqlite');
 
-export function openDatabase(dbPath = process.env.SAAS_DB_PATH || defaultPath) {
-  mkdirSync(dirname(dbPath), { recursive: true });
-  const db = new DatabaseSync(dbPath);
-  db.exec('PRAGMA foreign_keys = ON;');
-  migrate(db);
-  return db;
+export async function openDatabase(options = {}) {
+  const databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL;
+  if (databaseUrl) return openPostgres(databaseUrl);
+  return openSqlite(options.dbPath || process.env.SAAS_DB_PATH || defaultPath);
 }
 
-function migrate(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS organizations (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      created_at TEXT NOT NULL
-    );
+async function openSqlite(dbPath) {
+  mkdirSync(dirname(dbPath), { recursive: true });
+  const raw = new DatabaseSync(dbPath);
+  raw.exec('PRAGMA foreign_keys = ON;');
+  const adapter = {
+    dialect: 'sqlite',
+    async get(sql, params = []) {
+      return raw.prepare(sql).get(...params);
+    },
+    async all(sql, params = []) {
+      return raw.prepare(sql).all(...params);
+    },
+    async run(sql, params = []) {
+      const result = raw.prepare(sql).run(...params);
+      return { changes: Number(result.changes || 0) };
+    },
+    async exec(sql) {
+      raw.exec(sql);
+    },
+    async transaction(callback) {
+      raw.exec('BEGIN');
+      try {
+        const result = await callback(adapter);
+        raw.exec('COMMIT');
+        return result;
+      } catch (error) {
+        raw.exec('ROLLBACK');
+        throw error;
+      }
+    },
+    async ping() {
+      raw.prepare('SELECT 1').get();
+      return true;
+    },
+    async close() {
+      raw.close();
+    }
+  };
+  await migrate(adapter, sqliteMigrations);
+  return adapter;
+}
 
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-      name TEXT NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
+async function openPostgres(databaseUrl) {
+  let pg;
+  try {
+    pg = await import('pg');
+  } catch {
+    throw new Error('PostgreSQL requires the "pg" package. Run npm install in saas/.');
+  }
+  const pool = new pg.Pool({
+    connectionString: databaseUrl,
+    ssl: process.env.DATABASE_SSL === 'true'
+      ? { rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED !== 'false' }
+      : undefined,
+    max: Number(process.env.DATABASE_POOL_MAX || 10)
+  });
 
-    CREATE TABLE IF NOT EXISTS memberships (
-      id TEXT PRIMARY KEY,
-      organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      role TEXT NOT NULL CHECK (role IN ('admin', 'it', 'readonly')),
-      created_at TEXT NOT NULL,
-      UNIQUE (organization_id, user_id)
-    );
+  const createAdapter = (client = pool) => ({
+    dialect: 'postgres',
+    async get(sql, params = []) {
+      const result = await client.query(postgresSql(sql), params);
+      return result.rows[0];
+    },
+    async all(sql, params = []) {
+      const result = await client.query(postgresSql(sql), params);
+      return result.rows;
+    },
+    async run(sql, params = []) {
+      const result = await client.query(postgresSql(sql), params);
+      return { changes: Number(result.rowCount || 0) };
+    },
+    async exec(sql) {
+      await client.query(sql);
+    },
+    async ping() {
+      await client.query('SELECT 1');
+      return true;
+    }
+  });
+  const adapter = createAdapter();
+  adapter.transaction = async (callback) => {
+    const client = await pool.connect();
+    const tx = createAdapter(client);
+    try {
+      await client.query('BEGIN');
+      const result = await callback(tx);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+  adapter.close = () => pool.end();
+  await migrate(adapter, postgresMigrations);
+  return adapter;
+}
 
-    CREATE TABLE IF NOT EXISTS people (
-      id TEXT PRIMARY KEY,
-      organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-      first_name TEXT NOT NULL,
-      last_name TEXT NOT NULL,
-      email TEXT,
-      department TEXT,
-      role_title TEXT,
-      status TEXT NOT NULL DEFAULT 'active',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS assets (
-      id TEXT PRIMARY KEY,
-      organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-      asset_tag TEXT NOT NULL,
-      serial_number TEXT NOT NULL,
-      model_name TEXT,
-      status TEXT NOT NULL DEFAULT 'in_stock',
-      person_id TEXT REFERENCES people(id) ON DELETE SET NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      UNIQUE (organization_id, serial_number),
-      UNIQUE (organization_id, asset_tag)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_people_org ON people(organization_id);
-    CREATE INDEX IF NOT EXISTS idx_assets_org ON assets(organization_id);
-    CREATE INDEX IF NOT EXISTS idx_memberships_user ON memberships(user_id);
+async function migrate(db, migrations) {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    )
   `);
+  const applied = new Set(
+    (await db.all('SELECT version FROM schema_migrations')).map((row) => Number(row.version))
+  );
+  for (const migration of migrations) {
+    if (applied.has(migration.version)) continue;
+    await db.transaction(async (tx) => {
+      await tx.exec(migration.sql);
+      await tx.run(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+        [migration.version, new Date().toISOString()]
+      );
+    });
+  }
+}
+
+function postgresSql(sql) {
+  let index = 0;
+  return sql.replace(/\?/g, () => `$${++index}`);
 }

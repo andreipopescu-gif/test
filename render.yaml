@@ -1,0 +1,35 @@
+databases:
+  - name: it-inventory-saas-staging-db
+    region: frankfurt
+    databaseName: it_inventory_saas
+    user: it_inventory_saas
+
+services:
+  - type: web
+    name: it-inventory-saas-staging
+    runtime: node
+    region: frankfurt
+    buildCommand: cd saas && npm ci
+    startCommand: cd saas && npm start
+    healthCheckPath: /api/ready
+    autoDeployTrigger: commit
+    buildFilter:
+      paths:
+        - saas/**
+        - src/import/**
+        - src/settings/**
+        - src/utils/**
+        - render.yaml
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 22.12.0
+      - key: SAAS_JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: it-inventory-saas-staging-db
+          property: connectionString
+      - key: DATABASE_SSL
+        value: "false"

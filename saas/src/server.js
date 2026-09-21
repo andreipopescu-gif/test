@@ -2,21 +2,35 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join, dirname, extname, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { openDatabase } from './db.js';
 import { hashPassword, verifyPassword, signToken, verifyToken } from './auth.js';
-import { readJson, sendJson, sendError, badRequest, unauthorized, notFound } from './http.js';
+import {
+  readJson,
+  readMultipartForm,
+  sendJson,
+  sendError,
+  badRequest,
+  unauthorized,
+  notFound
+} from './http.js';
+import { buildSaasImportPreview } from './import-service.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
 const publicDir = join(rootDir, 'public');
 const host = process.env.HOST || '0.0.0.0';
 const port = Number(process.env.PORT || 8090);
+if (process.env.NODE_ENV === 'production' && !process.env.SAAS_JWT_SECRET) {
+  throw new Error('SAAS_JWT_SECRET is required in production');
+}
 
-const db = openDatabase();
+const db = await openDatabase();
+const rateLimits = new Map();
 
 const server = createServer(async (req, res) => {
   try {
+    addSecurityHeaders(req, res);
     const url = new URL(req.url || '/', `http://${req.headers.host}`);
     if (url.pathname.startsWith('/api/')) {
       await handleApi(req, res, url);
@@ -31,6 +45,14 @@ const server = createServer(async (req, res) => {
 server.listen(port, host, () => {
   console.log(`IT Inventory SaaS MVP at http://${host}:${port}`);
 });
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.once(signal, () => {
+    server.close(async () => {
+      await db.close();
+      process.exit(0);
+    });
+  });
+}
 
 async function handleApi(req, res, url) {
   const method = req.method || 'GET';
@@ -44,58 +66,138 @@ async function handleApi(req, res, url) {
     });
   }
 
+  if (method === 'GET' && path === '/api/ready') {
+    await db.ping();
+    return sendJson(res, { ok: true, database: db.dialect });
+  }
+
   if (method === 'POST' && path === '/api/auth/register') {
-    return sendJson(res, register(await readJson(req)), 201);
+    enforceRateLimit(req, 'auth', 20, 15 * 60_000);
+    return sendJson(res, await register(await readJson(req)), 201);
   }
 
   if (method === 'POST' && path === '/api/auth/login') {
-    return sendJson(res, login(await readJson(req)));
+    enforceRateLimit(req, 'auth', 20, 15 * 60_000);
+    return sendJson(res, await login(await readJson(req)));
   }
 
-  const session = requireSession(req);
+  if (method === 'POST' && path === '/api/invitations/accept') {
+    enforceRateLimit(req, 'auth', 20, 15 * 60_000);
+    return sendJson(res, await acceptInvitation(await readJson(req)));
+  }
+
+  const session = await requireSession(req);
 
   if (method === 'GET' && path === '/api/me') {
-    return sendJson(res, getMe(session));
+    return sendJson(res, await getMe(session));
+  }
+
+  if (method === 'POST' && path === '/api/auth/switch-organization') {
+    return sendJson(res, await switchOrganization(session, await readJson(req)));
+  }
+
+  if (path === '/api/members' && method === 'GET') {
+    requireRole(session, ['admin', 'it']);
+    return sendJson(res, await listMembers(session.organizationId));
+  }
+
+  if (path === '/api/invitations' && method === 'POST') {
+    requireRole(session, ['admin']);
+    const invitation = await createInvitation(session, await readJson(req), req);
+    return sendJson(res, invitation, 201);
+  }
+
+  if (method === 'PUT' && path.startsWith('/api/members/') && path.endsWith('/role')) {
+    requireRole(session, ['admin']);
+    const userId = path.split('/')[3];
+    return sendJson(res, await updateMemberRole(session, userId, await readJson(req)));
+  }
+
+  if (path === '/api/audit' && method === 'GET') {
+    requireRole(session, ['admin', 'it']);
+    return sendJson(res, await listAuditLogs(session.organizationId));
+  }
+
+  if (method === 'POST' && path === '/api/import/preview') {
+    requireRole(session, ['admin', 'it']);
+    enforceRateLimit(req, 'upload', 30, 60 * 60_000);
+    const upload = await readMultipartForm(req);
+    if (!upload.file.originalName.toLowerCase().endsWith('.csv')) {
+      throw badRequest('Only CSV files are supported in the SaaS MVP');
+    }
+    const preview = await createImportPreview(session, upload);
+    return sendJson(res, preview, 201);
+  }
+
+  if (method === 'POST' && path === '/api/import/apply') {
+    requireRole(session, ['admin', 'it']);
+    return sendJson(res, await applyImportBatch(session, await readJson(req)));
   }
 
   if (path === '/api/people') {
-    if (method === 'GET') return sendJson(res, listPeople(session.organizationId));
-    if (method === 'POST') return sendJson(res, createPerson(session.organizationId, await readJson(req)), 201);
+    if (method === 'GET') return sendJson(res, await listPeople(session.organizationId));
+    if (method === 'POST') {
+      requireRole(session, ['admin', 'it']);
+      const person = await createPerson(session.organizationId, await readJson(req));
+      await addAudit(session, 'person.create', 'person', person.id);
+      return sendJson(res, person, 201);
+    }
   }
 
   if (method === 'DELETE' && path.startsWith('/api/people/')) {
+    requireRole(session, ['admin', 'it']);
     const id = path.split('/')[3];
-    deletePerson(session.organizationId, id);
+    await deletePerson(session.organizationId, id);
+    await addAudit(session, 'person.delete', 'person', id);
     return sendJson(res, { ok: true, id });
   }
 
   if (path === '/api/assets') {
-    if (method === 'GET') return sendJson(res, listAssets(session.organizationId));
-    if (method === 'POST') return sendJson(res, createAsset(session.organizationId, await readJson(req)), 201);
+    if (method === 'GET') return sendJson(res, await listAssets(session.organizationId));
+    if (method === 'POST') {
+      requireRole(session, ['admin', 'it']);
+      const asset = await createAsset(session.organizationId, await readJson(req));
+      await addAudit(session, 'asset.create', 'asset', asset.id);
+      return sendJson(res, asset, 201);
+    }
   }
 
   if (method === 'DELETE' && path.startsWith('/api/assets/')) {
+    requireRole(session, ['admin', 'it']);
     const id = path.split('/')[3];
-    deleteAsset(session.organizationId, id);
+    await deleteAsset(session.organizationId, id);
+    await addAudit(session, 'asset.delete', 'asset', id);
     return sendJson(res, { ok: true, id });
   }
 
   throw notFound('API route not found');
 }
 
-function requireSession(req) {
+async function requireSession(req) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
   const payload = verifyToken(token);
   if (!payload?.sub || !payload?.org) throw unauthorized();
+  const membership = await db.get(`
+    SELECT role FROM memberships WHERE user_id = ? AND organization_id = ?
+  `, [payload.sub, payload.org]);
+  if (!membership) throw unauthorized();
   return {
     userId: payload.sub,
     organizationId: payload.org,
-    role: payload.role || 'readonly'
+    role: membership.role
   };
 }
 
-function register(input) {
+function requireRole(session, allowedRoles) {
+  if (!allowedRoles.includes(session.role)) {
+    const error = new Error('Insufficient permissions');
+    error.status = 403;
+    throw error;
+  }
+}
+
+async function register(input) {
   const orgName = clean(input.orgName);
   const email = clean(input.email).toLowerCase();
   const password = String(input.password || '');
@@ -104,36 +206,34 @@ function register(input) {
     throw badRequest('orgName, email and password (min 8 chars) are required');
   }
 
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+  const existing = await db.get('SELECT id FROM users WHERE LOWER(email) = LOWER(?)', [email]);
   if (existing) throw badRequest('Email already registered');
 
   const now = new Date().toISOString();
   const orgId = randomUUID();
   const userId = randomUUID();
   const membershipId = randomUUID();
-  const slug = uniqueSlug(slugify(orgName));
+  const slug = await uniqueSlug(slugify(orgName));
 
-  db.exec('BEGIN');
-  try {
-    db.prepare(`
+  await db.transaction(async (tx) => {
+    await tx.run(`
       INSERT INTO organizations (id, name, slug, created_at)
       VALUES (?, ?, ?, ?)
-    `).run(orgId, orgName, slug, now);
+    `, [orgId, orgName, slug, now]);
 
-    db.prepare(`
+    await tx.run(`
       INSERT INTO users (id, email, name, password_hash, created_at)
       VALUES (?, ?, ?, ?, ?)
-    `).run(userId, email, name, hashPassword(password), now);
+    `, [userId, email, name, hashPassword(password), now]);
 
-    db.prepare(`
+    await tx.run(`
       INSERT INTO memberships (id, organization_id, user_id, role, created_at)
       VALUES (?, ?, ?, 'admin', ?)
-    `).run(membershipId, orgId, userId, now);
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
+    `, [membershipId, orgId, userId, now]);
+  }).catch((error) => {
+    if (isUniqueViolation(error)) throw badRequest('Email or organization slug already exists');
     throw error;
-  }
+  });
 
   const token = signToken({ sub: userId, org: orgId, role: 'admin', email });
   return {
@@ -143,60 +243,278 @@ function register(input) {
   };
 }
 
-function login(input) {
+async function login(input) {
   const email = clean(input.email).toLowerCase();
   const password = String(input.password || '');
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  const user = await db.get('SELECT * FROM users WHERE LOWER(email) = LOWER(?)', [email]);
   if (!user || !verifyPassword(password, user.password_hash)) {
     throw unauthorized('Invalid email or password');
   }
-  const membership = db.prepare(`
-    SELECT * FROM memberships WHERE user_id = ? ORDER BY created_at ASC LIMIT 1
-  `).get(user.id);
-  if (!membership) throw unauthorized('User has no organization');
+  const memberships = await listUserOrganizations(user.id);
+  if (!memberships.length) throw unauthorized('User has no organization');
+  const requestedOrgId = clean(input.organizationId);
+  if (!requestedOrgId && memberships.length > 1) {
+    return {
+      requiresOrganization: true,
+      user: { id: user.id, email: user.email, name: user.name },
+      organizations: memberships
+    };
+  }
+  const membership = requestedOrgId
+    ? memberships.find((item) => item.id === requestedOrgId)
+    : memberships[0];
+  if (!membership) throw unauthorized('User does not belong to that organization');
 
   const token = signToken({
     sub: user.id,
-    org: membership.organization_id,
+    org: membership.id,
     role: membership.role,
     email: user.email
   });
-  const org = db.prepare('SELECT id, name FROM organizations WHERE id = ?').get(membership.organization_id);
   return {
     token,
     user: { id: user.id, email: user.email, name: user.name },
-    organization: org
+    organization: { id: membership.id, name: membership.name },
+    role: membership.role
   };
 }
 
-function getMe(session) {
-  const user = db.prepare('SELECT id, email, name FROM users WHERE id = ?').get(session.userId);
-  const org = db.prepare('SELECT id, name, slug FROM organizations WHERE id = ?').get(session.organizationId);
+async function getMe(session) {
+  const user = await db.get('SELECT id, email, name FROM users WHERE id = ?', [session.userId]);
+  const org = await db.get('SELECT id, name, slug FROM organizations WHERE id = ?', [session.organizationId]);
   if (!user || !org) throw unauthorized();
-  return { user, organization: org, role: session.role };
+  return {
+    user,
+    organization: org,
+    organizations: await listUserOrganizations(session.userId),
+    role: session.role
+  };
 }
 
-function listPeople(organizationId) {
-  return db.prepare(`
-    SELECT id, first_name AS firstName, last_name AS lastName, email, department,
-           role_title AS role, status, created_at AS createdAt, updated_at AS updatedAt
+async function listUserOrganizations(userId) {
+  return db.all(`
+    SELECT o.id, o.name, o.slug, m.role
+    FROM memberships m
+    JOIN organizations o ON o.id = m.organization_id
+    WHERE m.user_id = ?
+    ORDER BY LOWER(o.name)
+  `, [userId]);
+}
+
+async function switchOrganization(session, input) {
+  const organizationId = clean(input.organizationId);
+  const membership = await db.get(`
+    SELECT m.role, o.id, o.name
+    FROM memberships m
+    JOIN organizations o ON o.id = m.organization_id
+    WHERE m.user_id = ? AND m.organization_id = ?
+  `, [session.userId, organizationId]);
+  if (!membership) throw unauthorized('User does not belong to that organization');
+  const user = await db.get('SELECT id, email, name FROM users WHERE id = ?', [session.userId]);
+  return {
+    token: signToken({
+      sub: user.id,
+      org: membership.id,
+      role: membership.role,
+      email: user.email
+    }),
+    user,
+    organization: { id: membership.id, name: membership.name },
+    role: membership.role
+  };
+}
+
+async function listMembers(organizationId) {
+  return db.all(`
+    SELECT u.id, u.email, u.name, m.role, m.created_at AS createdAt
+    FROM memberships m
+    JOIN users u ON u.id = m.user_id
+    WHERE m.organization_id = ?
+    ORDER BY LOWER(u.name), LOWER(u.email)
+  `, [organizationId]);
+}
+
+async function createInvitation(session, input, req) {
+  const email = clean(input.email).toLowerCase();
+  const role = ['admin', 'it', 'readonly'].includes(input.role) ? input.role : 'readonly';
+  if (!email || !email.includes('@')) throw badRequest('Valid email is required');
+  const existingMember = await db.get(`
+    SELECT 1
+    FROM memberships m
+    JOIN users u ON u.id = m.user_id
+    WHERE m.organization_id = ? AND LOWER(u.email) = LOWER(?)
+  `, [session.organizationId, email]);
+  if (existingMember) throw badRequest('User is already a member');
+
+  const token = randomBytes(32).toString('base64url');
+  const tokenHash = hashToken(token);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const id = randomUUID();
+  await db.run(`
+    INSERT INTO invitations (
+      id, organization_id, email, role, token_hash, invited_by, expires_at, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    id,
+    session.organizationId,
+    email,
+    role,
+    tokenHash,
+    session.userId,
+    expiresAt,
+    now.toISOString()
+  ]);
+  await addAudit(session, 'invitation.create', 'invitation', id, { email, role });
+
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const protocol = forwardedProto || 'http';
+  const hostName = req.headers.host || `localhost:${port}`;
+  return {
+    id,
+    email,
+    role,
+    expiresAt,
+    inviteUrl: `${protocol}://${hostName}/?invite=${encodeURIComponent(token)}`
+  };
+}
+
+async function acceptInvitation(input) {
+  const token = clean(input.token);
+  const password = String(input.password || '');
+  if (!token) throw badRequest('Invitation token is required');
+  const invitation = await db.get(`
+    SELECT i.*, o.name AS organization_name
+    FROM invitations i
+    JOIN organizations o ON o.id = i.organization_id
+    WHERE i.token_hash = ?
+  `, [hashToken(token)]);
+  if (!invitation || invitation.accepted_at || invitation.expires_at < new Date().toISOString()) {
+    throw badRequest('Invitation is invalid or expired');
+  }
+
+  let user = await db.get(
+    'SELECT * FROM users WHERE LOWER(email) = LOWER(?)',
+    [invitation.email]
+  );
+  if (user) {
+    if (!verifyPassword(password, user.password_hash)) {
+      throw unauthorized('Use the existing account password to accept this invitation');
+    }
+  } else {
+    if (password.length < 8) throw badRequest('Password must have at least 8 characters');
+    user = {
+      id: randomUUID(),
+      email: invitation.email,
+      name: clean(input.name) || invitation.email
+    };
+  }
+
+  const now = new Date().toISOString();
+  await db.transaction(async (tx) => {
+    if (!await tx.get('SELECT id FROM users WHERE id = ?', [user.id])) {
+      await tx.run(`
+        INSERT INTO users (id, email, name, password_hash, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `, [user.id, user.email, user.name, hashPassword(password), now]);
+    }
+    await tx.run(`
+      INSERT INTO memberships (
+        id, organization_id, user_id, role, created_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT (organization_id, user_id) DO NOTHING
+    `, [randomUUID(), invitation.organization_id, user.id, invitation.role, now]);
+    await tx.run(`
+      UPDATE invitations SET accepted_at = ? WHERE id = ?
+    `, [now, invitation.id]);
+  });
+
+  const auditSession = {
+    organizationId: invitation.organization_id,
+    userId: user.id
+  };
+  await addAudit(auditSession, 'invitation.accept', 'invitation', invitation.id, {
+    email: invitation.email,
+    role: invitation.role
+  });
+  return {
+    token: signToken({
+      sub: user.id,
+      org: invitation.organization_id,
+      role: invitation.role,
+      email: user.email
+    }),
+    user: { id: user.id, email: user.email, name: user.name },
+    organization: { id: invitation.organization_id, name: invitation.organization_name },
+    role: invitation.role
+  };
+}
+
+async function updateMemberRole(session, userId, input) {
+  const role = clean(input.role);
+  if (!['admin', 'it', 'readonly'].includes(role)) throw badRequest('Invalid role');
+  const membership = await db.get(`
+    SELECT id, role FROM memberships
+    WHERE organization_id = ? AND user_id = ?
+  `, [session.organizationId, userId]);
+  if (!membership) throw notFound('Member not found');
+  if (membership.role === 'admin' && role !== 'admin') {
+    const adminCount = (await db.get(`
+      SELECT COUNT(*) AS count FROM memberships
+      WHERE organization_id = ? AND role = 'admin'
+    `, [session.organizationId])).count;
+    if (Number(adminCount) <= 1) throw badRequest('Organization must keep at least one admin');
+  }
+  await db.run('UPDATE memberships SET role = ? WHERE id = ?', [role, membership.id]);
+  await addAudit(session, 'member.role_update', 'user', userId, {
+    before: membership.role,
+    after: role
+  });
+  return (await listMembers(session.organizationId)).find((member) => member.id === userId);
+}
+
+async function listAuditLogs(organizationId) {
+  return (await db.all(`
+    SELECT a.id, a.action, a.entity_type AS "entityType", a.entity_id AS "entityId",
+           a.details_json AS "detailsJson", a.created_at AS "createdAt",
+           u.email AS "userEmail"
+    FROM audit_logs a
+    LEFT JOIN users u ON u.id = a.user_id
+    WHERE a.organization_id = ?
+    ORDER BY a.created_at DESC
+    LIMIT 200
+  `, [organizationId])).map((row) => ({
+    ...row,
+    details: JSON.parse(row.detailsJson || '{}'),
+    detailsJson: undefined
+  }));
+}
+
+function hashToken(token) {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+async function listPeople(organizationId) {
+  return db.all(`
+    SELECT id, first_name AS "firstName", last_name AS "lastName", email, department,
+           role_title AS role, status, created_at AS "createdAt", updated_at AS "updatedAt"
     FROM people
     WHERE organization_id = ?
-    ORDER BY last_name COLLATE NOCASE, first_name COLLATE NOCASE
-  `).all(organizationId);
+    ORDER BY LOWER(last_name), LOWER(first_name)
+  `, [organizationId]);
 }
 
-function createPerson(organizationId, input) {
+async function createPerson(organizationId, input) {
   const firstName = clean(input.firstName);
   const lastName = clean(input.lastName);
   if (!firstName || !lastName) throw badRequest('firstName and lastName are required');
   const now = new Date().toISOString();
   const id = randomUUID();
-  db.prepare(`
+  await db.run(`
     INSERT INTO people (
       id, organization_id, first_name, last_name, email, department, role_title, status, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `, [
     id,
     organizationId,
     firstName,
@@ -207,61 +525,284 @@ function createPerson(organizationId, input) {
     input.status === 'inactive' ? 'inactive' : 'active',
     now,
     now
-  );
-  return listPeople(organizationId).find((person) => person.id === id);
+  ]);
+  return (await listPeople(organizationId)).find((person) => person.id === id);
 }
 
-function deletePerson(organizationId, id) {
-  const result = db.prepare('DELETE FROM people WHERE id = ? AND organization_id = ?').run(id, organizationId);
+async function deletePerson(organizationId, id) {
+  const result = await db.run(
+    'DELETE FROM people WHERE id = ? AND organization_id = ?',
+    [id, organizationId]
+  );
   if (!result.changes) throw notFound('Person not found');
 }
 
-function listAssets(organizationId) {
-  return db.prepare(`
-    SELECT a.id, a.asset_tag AS assetTag, a.serial_number AS serialNumber, a.model_name AS modelName,
-           a.status, a.person_id AS personId, a.created_at AS createdAt, a.updated_at AS updatedAt,
-           p.first_name AS personFirstName, p.last_name AS personLastName
+async function listAssets(organizationId) {
+  return db.all(`
+    SELECT a.id, a.asset_tag AS "assetTag", a.serial_number AS "serialNumber", a.model_name AS "modelName",
+           a.status, a.person_id AS "personId", a.created_at AS "createdAt", a.updated_at AS "updatedAt",
+           p.first_name AS "personFirstName", p.last_name AS "personLastName"
     FROM assets a
     LEFT JOIN people p ON p.id = a.person_id
     WHERE a.organization_id = ?
-    ORDER BY a.asset_tag COLLATE NOCASE
-  `).all(organizationId);
+    ORDER BY LOWER(a.asset_tag)
+  `, [organizationId]);
 }
 
-function createAsset(organizationId, input) {
+async function createAsset(organizationId, input) {
   const assetTag = clean(input.assetTag);
   const serialNumber = clean(input.serialNumber);
   if (!assetTag || !serialNumber) throw badRequest('assetTag and serialNumber are required');
   const now = new Date().toISOString();
   const id = randomUUID();
+  const personId = clean(input.personId) || null;
+  if (personId) {
+    const person = await db.get(`
+      SELECT id FROM people WHERE id = ? AND organization_id = ?
+    `, [personId, organizationId]);
+    if (!person) throw badRequest('Person does not belong to this organization');
+  }
   try {
-    db.prepare(`
+    await db.run(`
       INSERT INTO assets (
         id, organization_id, asset_tag, serial_number, model_name, status, person_id, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       id,
       organizationId,
       assetTag,
       serialNumber,
       clean(input.modelName),
-      normalizeStatus(input.status),
-      clean(input.personId) || null,
+      personId ? 'assigned' : normalizeStatus(input.status),
+      personId,
       now,
       now
-    );
+    ]);
   } catch (error) {
-    if (String(error.message || '').includes('UNIQUE')) {
+    if (isUniqueViolation(error)) {
       throw badRequest('assetTag or serialNumber already exists in this organization');
     }
     throw error;
   }
-  return listAssets(organizationId).find((asset) => asset.id === id);
+  return (await listAssets(organizationId)).find((asset) => asset.id === id);
 }
 
-function deleteAsset(organizationId, id) {
-  const result = db.prepare('DELETE FROM assets WHERE id = ? AND organization_id = ?').run(id, organizationId);
+async function deleteAsset(organizationId, id) {
+  const result = await db.run(
+    'DELETE FROM assets WHERE id = ? AND organization_id = ?',
+    [id, organizationId]
+  );
   if (!result.changes) throw notFound('Asset not found');
+}
+
+async function createImportPreview(session, upload) {
+  const [existingAssets, existingPeople] = await Promise.all([
+    listAssets(session.organizationId),
+    listPeople(session.organizationId)
+  ]);
+  const preview = buildSaasImportPreview({
+    buffer: upload.file.buffer,
+    fileName: upload.file.originalName,
+    source: upload.fields.source || 'auto',
+    existingAssets,
+    existingPeople
+  });
+  const batchId = randomUUID();
+  const now = new Date().toISOString();
+
+  await db.transaction(async (tx) => {
+    await tx.run(`
+      INSERT INTO import_batches (
+        id, organization_id, user_id, source, file_name, status, summary_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, 'preview', ?, ?)
+    `, [
+      batchId,
+      session.organizationId,
+      session.userId,
+      preview.source,
+      preview.fileName,
+      JSON.stringify(preview.summary),
+      now
+    ]);
+
+    const storedRows = [];
+    for (const row of preview.rows) {
+      const id = randomUUID();
+      await tx.run(`
+        INSERT INTO import_rows (
+          id, batch_id, organization_id, row_key, action, data_json, warnings_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        id,
+        batchId,
+        session.organizationId,
+        row.rowKey,
+        row.action,
+        JSON.stringify(row),
+        JSON.stringify(row.warnings),
+        now
+      ]);
+      storedRows.push({ ...row, id });
+    }
+    preview.rows = storedRows;
+  });
+
+  await addAudit(session, 'import.preview', 'import_batch', batchId, {
+    source: preview.source,
+    fileName: preview.fileName,
+    summary: preview.summary
+  });
+  return { ...preview, batchId };
+}
+
+async function applyImportBatch(session, input) {
+  const batchId = clean(input.batchId);
+  if (!batchId) throw badRequest('batchId is required');
+  const batch = await db.get(`
+    SELECT * FROM import_batches
+    WHERE id = ? AND organization_id = ?
+  `, [batchId, session.organizationId]);
+  if (!batch) throw notFound('Import batch not found');
+  if (batch.status !== 'preview') throw badRequest('Import batch was already applied or cancelled');
+
+  const rows = await db.all(`
+    SELECT id, action, data_json AS "dataJson"
+    FROM import_rows
+    WHERE batch_id = ? AND organization_id = ?
+    ORDER BY created_at, id
+  `, [batchId, session.organizationId]);
+  const includeIds = Array.isArray(input.includeRowIds)
+    ? new Set(input.includeRowIds.map(clean))
+    : null;
+  const selected = rows.filter((row) =>
+    row.action !== 'skip' && (!includeIds || includeIds.has(row.id))
+  );
+  const now = new Date().toISOString();
+  let created = 0;
+  let updated = 0;
+  let peopleCreated = 0;
+
+  await db.transaction(async (tx) => {
+    for (const stored of selected) {
+      const row = JSON.parse(stored.dataJson);
+      let personId = null;
+      const personEmail = clean(row.person?.email).toLowerCase();
+      if (personEmail) {
+        let person = await tx.get(`
+          SELECT id FROM people
+          WHERE organization_id = ? AND LOWER(email) = LOWER(?)
+          LIMIT 1
+        `, [session.organizationId, personEmail]);
+        if (!person) {
+          person = { id: randomUUID() };
+          await tx.run(`
+            INSERT INTO people (
+              id, organization_id, first_name, last_name, email, department,
+              role_title, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+          `, [
+            person.id,
+            session.organizationId,
+            clean(row.person.firstName) || 'Unknown',
+            clean(row.person.lastName) || '-',
+            personEmail,
+            clean(row.person.department),
+            clean(row.person.role),
+            now,
+            now
+          ]);
+          peopleCreated += 1;
+        }
+        personId = person.id;
+      }
+
+      const existing = await tx.get(`
+        SELECT id, status FROM assets
+        WHERE organization_id = ? AND LOWER(serial_number) = LOWER(?)
+      `, [session.organizationId, row.serialNumber]);
+      if (existing) {
+        await tx.run(`
+          UPDATE assets
+          SET asset_tag = ?, model_name = ?, status = ?, person_id = ?, updated_at = ?
+          WHERE id = ? AND organization_id = ?
+        `, [
+          row.assetTag,
+          row.modelName,
+          personId ? 'assigned' : existing.status,
+          personId,
+          now,
+          existing.id,
+          session.organizationId
+        ]);
+        updated += 1;
+      } else {
+        await tx.run(`
+          INSERT INTO assets (
+            id, organization_id, asset_tag, serial_number, model_name,
+            status, person_id, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          randomUUID(),
+          session.organizationId,
+          row.assetTag,
+          row.serialNumber,
+          row.modelName,
+          personId ? 'assigned' : 'in_stock',
+          personId,
+          now,
+          now
+        ]);
+        created += 1;
+      }
+    }
+
+    await tx.run(`
+      UPDATE import_batches
+      SET status = 'applied', applied_at = ?, summary_json = ?
+      WHERE id = ? AND organization_id = ?
+    `, [
+      now,
+      JSON.stringify({
+        created,
+        updated,
+        peopleCreated,
+        skipped: rows.length - selected.length
+      }),
+      batchId,
+      session.organizationId
+    ]);
+  }).catch((error) => {
+    if (isUniqueViolation(error)) {
+      throw badRequest('The import conflicts with an existing serial number or asset tag');
+    }
+    throw error;
+  });
+
+  const summary = {
+    created,
+    updated,
+    peopleCreated,
+    skipped: rows.length - selected.length
+  };
+  await addAudit(session, 'import.apply', 'import_batch', batchId, summary);
+  return { ok: true, batchId, summary };
+}
+
+async function addAudit(session, action, entityType, entityId = '', details = {}) {
+  await db.run(`
+    INSERT INTO audit_logs (
+      id, organization_id, user_id, action, entity_type, entity_id, details_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    randomUUID(),
+    session.organizationId,
+    session.userId,
+    action,
+    entityType,
+    entityId || null,
+    JSON.stringify(details || {}),
+    new Date().toISOString()
+  ]);
 }
 
 async function serveStatic(req, res, url) {
@@ -311,10 +852,10 @@ function slugify(value) {
     .slice(0, 48) || 'org';
 }
 
-function uniqueSlug(base) {
+async function uniqueSlug(base) {
   let slug = base;
   let i = 2;
-  while (db.prepare('SELECT id FROM organizations WHERE slug = ?').get(slug)) {
+  while (await db.get('SELECT id FROM organizations WHERE slug = ?', [slug])) {
     slug = `${base}-${i}`;
     i += 1;
   }
@@ -324,4 +865,48 @@ function uniqueSlug(base) {
 function normalizeStatus(status) {
   const value = clean(status);
   return ['in_stock', 'assigned', 'deployed', 'service', 'retired'].includes(value) ? value : 'in_stock';
+}
+
+function isUniqueViolation(error) {
+  return error?.code === '23505' || String(error?.message || '').toLowerCase().includes('unique');
+}
+
+function enforceRateLimit(req, bucket, limit, windowMs) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const ip = forwarded || req.socket.remoteAddress || 'unknown';
+  const key = `${bucket}:${ip}`;
+  const now = Date.now();
+  const current = rateLimits.get(key);
+  if (!current || current.resetAt <= now) {
+    rateLimits.set(key, { count: 1, resetAt: now + windowMs });
+    cleanupRateLimits(now);
+    return;
+  }
+  current.count += 1;
+  if (current.count > limit) {
+    const error = new Error('Too many requests. Try again later.');
+    error.status = 429;
+    throw error;
+  }
+}
+
+function cleanupRateLimits(now) {
+  if (rateLimits.size < 1_000) return;
+  for (const [key, value] of rateLimits) {
+    if (value.resetAt <= now) rateLimits.delete(key);
+  }
+}
+
+function addSecurityHeaders(req, res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
+  );
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  if (forwardedProto === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
 }
