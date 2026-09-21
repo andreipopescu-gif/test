@@ -46,13 +46,30 @@ Requires Node **≥ 24** (Render uses 24.9.0).
 
 ## Immediate backlog (do not lose)
 
-1. **Phase 0** — paid Postgres/web before **2026-10-21**, SSL, backups, migration advisory lock, close open registration on prod, `SAAS_PUBLIC_URL`
-2. Remaining security items in `SECURITY-REVIEW.md` (H2 CSV cost, M-series, etc.)
-3. Phase 2 ImportPolicy (kill process-global import settings) before multi-client production data
-4. API gaps: member remove, password reset, people/device update/reassign, full teardown
+Spending is frozen until the product is complete, so the paid half of Phase 0
+is deferred on purpose. What is left, in order:
+
+1. **Before 2026-10-21** — the free database is deleted, not downgraded. Run
+   `npm run backup` and keep the dump somewhere off the provider.
+2. **Phase 2 ImportPolicy** — the shared import modules still hold exclusion
+   and alias lists in module-level state. Must land before two tenants rely on
+   per-organization import settings.
+3. **Email delivery** — invitations return a link the admin has to copy, and
+   there is no password reset. Needs a provider, so it needs a decision.
+4. **Phase 3a** — `external_ids`, `import_meta` and an `asset_assignments`
+   history table, so a pilot accumulates history instead of a snapshot.
+5. Remaining items in `SECURITY-REVIEW.md`: H2's queue/worker follow-up, M7,
+   M8, L1, and persistent rate limiting.
+
+Done here and not to be redone: the CSV denial of service, the auth side
+channels, registration defaults, migration locking, CI on both databases, the
+backup path, and the device/account lifecycle with its teardown.
 
 ## Deploy notes already learned
 
 - Postgres boots must **lazy-load** `node:sqlite` (commit `b46354c`); top-level sqlite import crashes Render.
 - Free web instance sleeps; first request after idle is slow; seed scripts wait for `/api/ready`.
 - `SAAS_TRUSTED_PROXIES=1` on Render so rate limits use the real client IP.
+- Migration 3 adds `users.token_epoch`. It is additive and safe to apply while
+  the previous version is still serving, and tokens without the claim keep
+  working.
