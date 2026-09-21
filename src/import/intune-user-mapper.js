@@ -1,4 +1,5 @@
 import { parsePersonDisplayName } from '../utils/person-name.js';
+import { fieldIndex, normalizeKey } from './record-lookup.js';
 
 export function mapIntuneUserRows(records) {
   const byKey = new Map();
@@ -79,16 +80,12 @@ function field(record, names) {
     const value = record[name];
     if (value !== undefined && value !== null && String(value).trim() !== '') return String(value).trim();
   }
-  const normalized = Object.fromEntries(
-    Object.entries(record).map(([key, value]) => [normalizeKey(key), value])
-  );
+  const index = fieldIndex(record);
   for (const name of list) {
-    const value = normalized[normalizeKey(name)];
+    const entry = index.get(normalizeKey(name));
+    if (!entry) continue;
+    const value = entry.last;
     if (value !== undefined && value !== null && String(value).trim() !== '') return String(value).trim();
   }
   return '';
-}
-
-function normalizeKey(value) {
-  return String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 }

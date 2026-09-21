@@ -1,4 +1,11 @@
-export function parseCsv(input) {
+// Defaults are far above any real Intune or Jamf export; they exist so an
+// uploaded file cannot choose how much work the process does.
+export const DEFAULT_MAX_COLUMNS = 512;
+export const DEFAULT_MAX_ROWS = 100_000;
+
+export function parseCsv(input, options = {}) {
+  const maxColumns = options.maxColumns ?? DEFAULT_MAX_COLUMNS;
+  const maxRows = options.maxRows ?? DEFAULT_MAX_ROWS;
   const text = Buffer.isBuffer(input) ? input.toString('utf8') : String(input ?? '');
   const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const delimiter = detectDelimiter(normalized);
@@ -42,6 +49,13 @@ export function parseCsv(input) {
   if (row.some((value) => value !== '')) rows.push(row);
   if (!rows.length) return { headers: [], records: [], delimiter };
 
+  if (rows[0].length > maxColumns) {
+    throw csvTooLarge(`CSV has ${rows[0].length} columns; the limit is ${maxColumns}.`);
+  }
+  if (rows.length - 1 > maxRows) {
+    throw csvTooLarge(`CSV has ${rows.length - 1} data rows; the limit is ${maxRows}.`);
+  }
+
   const headers = rows[0].map(normalizeHeader);
   const records = rows.slice(1).map((values, index) => {
     const record = { __line: index + 2 };
@@ -64,6 +78,13 @@ export function normalizeHeader(header) {
     .replace(/^\uFEFF/, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function csvTooLarge(message) {
+  const error = new Error(message);
+  error.status = 413;
+  error.code = 'CSV_TOO_LARGE';
+  return error;
 }
 
 function countUnquoted(line, delimiter) {

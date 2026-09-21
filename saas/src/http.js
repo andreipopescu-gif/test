@@ -69,7 +69,11 @@ export function sendJson(res, payload, status = 200) {
 
 export function sendError(res, error) {
   const status = error.status || 500;
-  sendJson(res, { error: error.message || 'Server error' }, status);
+  // Only messages that were raised deliberately carry a status. Anything else
+  // is an internal failure whose text leaks table names, driver internals and
+  // file paths, so the client gets a generic message and the detail is logged.
+  const message = error.status ? error.message : 'Server error';
+  sendJson(res, { error: message || 'Server error' }, status);
   if (status >= 500) console.error(error);
 }
 

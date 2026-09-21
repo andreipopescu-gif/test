@@ -25,5 +25,7 @@ export function detectSource(headers, requestedSource = 'auto') {
   const jamfScore = jamfHeaders.filter((header) => headerSet.has(header.toLowerCase())).length;
   if (intuneScore >= 3 && intuneScore >= jamfScore) return 'intune';
   if (jamfScore >= 3) return 'jamf';
-  throw new Error('Nu pot detecta sursa CSV. Alege manual Intune sau Jamf.');
+  const error = new Error('Nu pot detecta sursa CSV. Alege manual Intune sau Jamf.');
+  error.status = 400;
+  throw error;
 }

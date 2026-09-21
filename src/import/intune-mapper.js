@@ -1,6 +1,7 @@
 import { normalizeImportDate } from './date-utils.js';
 import { detectMtrRegion, shouldSkipImportedUser } from './excluded-users.js';
 import { parsePersonDisplayName } from '../utils/person-name.js';
+import { fieldIndex, normalizeKey } from './record-lookup.js';
 
 export function mapIntuneRows(records, deviceFilter = 'all') {
   return records.map(mapRow).filter((row) => row && matchesFilter(row, deviceFilter));
@@ -147,17 +148,14 @@ function inferOsIfMissing(os, manufacturer, model) {
 
 function field(record, names) {
   const aliases = Array.isArray(names) ? names : [names];
-  const entries = Object.entries(record);
+  const index = fieldIndex(record);
   for (const alias of aliases) {
-    const wanted = normalizeKey(alias);
-    const found = entries.find(([key]) => normalizeKey(key) === wanted);
-    if (found && String(found[1] ?? '').trim()) return String(found[1]).trim();
+    const entry = index.get(normalizeKey(alias));
+    if (!entry) continue;
+    const value = String(entry.first ?? '').trim();
+    if (value) return value;
   }
   return '';
-}
-
-function normalizeKey(value) {
-  return String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
 function isLenovoMtm(value) {

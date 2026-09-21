@@ -11,6 +11,13 @@ import { setRuntimeIdentityGroups } from '../../src/import/known-person-aliases.
 setRuntimeExcludedUsers({ emails: [], nameRules: [], useDefaults: false });
 setRuntimeIdentityGroups([], { useDefaults: false });
 
+export const IMPORT_SOURCES = ['auto', 'intune', 'jamf'];
+
+// A hosted tenant shares one event loop with every other tenant, so the SaaS
+// import is capped well below the shared parser defaults.
+const maxColumns = positiveInt(process.env.SAAS_MAX_IMPORT_COLUMNS, 256);
+const maxRows = positiveInt(process.env.SAAS_MAX_IMPORT_ROWS, 20_000);
+
 export function buildSaasImportPreview({
   buffer,
   fileName,
@@ -18,8 +25,15 @@ export function buildSaasImportPreview({
   existingAssets = [],
   existingPeople = []
 }) {
-  const parsed = parseCsv(buffer);
-  const detectedSource = detectSource(parsed.headers, source);
+  // `source` arrives as a multipart form field. Unvalidated it reaches
+  // detectSource(), which returns it verbatim, and then a column constrained to
+  // 'intune' or 'jamf'.
+  const requestedSource = clean(source) || 'auto';
+  if (!IMPORT_SOURCES.includes(requestedSource)) {
+    throw badRequest(`source must be one of ${IMPORT_SOURCES.join(', ')}`);
+  }
+  const parsed = parseCsv(buffer, { maxColumns, maxRows });
+  const detectedSource = detectSource(parsed.headers, requestedSource);
   const normalizedRows = detectedSource === 'intune'
     ? mapIntuneRows(parsed.records, 'all')
     : mapJamfRows(parsed.records, 'all');
@@ -119,6 +133,17 @@ function summarize(rows, total) {
 
 function key(value) {
   return clean(value).toLowerCase();
+}
+
+function positiveInt(raw, fallback) {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+function badRequest(message) {
+  const error = new Error(message);
+  error.status = 400;
+  return error;
 }
 
 function clean(value) {
