@@ -24,10 +24,20 @@ const port = Number(process.env.PORT || 8090);
 if (!process.env.SAAS_JWT_SECRET) {
   throw new Error('SAAS_JWT_SECRET is required. Generate one with: openssl rand -hex 32');
 }
+const isProduction = process.env.NODE_ENV === 'production';
 // Registration has three states: closed, gated behind a shared token so pilots
-// can still be provisioned, or fully open for local development.
-const allowRegistration = process.env.SAAS_ALLOW_REGISTRATION !== 'false';
+// can still be provisioned, or fully open for local development. A production
+// host never opens itself: without an explicit opt-in it needs the token, and
+// with neither it stays closed.
 const registrationToken = process.env.SAAS_REGISTRATION_TOKEN || '';
+const allowRegistration = process.env.SAAS_ALLOW_REGISTRATION
+  ? process.env.SAAS_ALLOW_REGISTRATION === 'true'
+  : !isProduction || Boolean(registrationToken);
+// Invitation links must not be built from a client-supplied Host header.
+const publicUrl = String(process.env.SAAS_PUBLIC_URL || '').trim().replace(/\/+$/, '');
+if (isProduction && !publicUrl) {
+  console.warn('SAAS_PUBLIC_URL is not set; invitation links fall back to the request Host header.');
+}
 // An unparseable limit must fall back to the default, not to NaN, because every
 // size comparison against NaN is false and would disable the limit entirely.
 const maxUploadMb = Number(process.env.SAAS_MAX_UPLOAD_MB);
@@ -38,6 +48,9 @@ const trustedProxies = Math.max(0, Number(process.env.SAAS_TRUSTED_PROXIES) || 0
 
 const db = await openDatabase();
 const rateLimits = new Map();
+// Verified against when no user matches, so login spends the same time on an
+// unknown address as on a wrong password.
+const decoyPasswordHash = hashPassword(randomBytes(32).toString('hex'));
 
 const server = createServer(async (req, res) => {
   try {
@@ -78,8 +91,10 @@ async function handleApi(req, res, url) {
   }
 
   if (method === 'GET' && path === '/api/ready') {
-    await db.ping();
-    return sendJson(res, { ok: true, database: db.dialect });
+    // Unauthenticated and it touches the database, so an uptime probe is fine
+    // but a flood must not become free query load.
+    enforceRateLimit(req, 'ready', 60, 60_000);
+    return sendJson(res, await readiness());
   }
 
   if (method === 'POST' && path === '/api/auth/register') {
@@ -211,6 +226,19 @@ async function requireSession(req) {
   };
 }
 
+// Uptime probes poll readiness continuously; a short cache keeps a burst from
+// becoming one database round trip per request.
+let readinessCache = { expiresAt: 0, payload: null };
+
+async function readiness() {
+  const now = Date.now();
+  if (readinessCache.payload && readinessCache.expiresAt > now) return readinessCache.payload;
+  await db.ping();
+  const payload = { ok: true, database: db.dialect };
+  readinessCache = { expiresAt: now + 5_000, payload };
+  return payload;
+}
+
 function requireRole(session, allowedRoles) {
   if (!allowedRoles.includes(session.role)) {
     const error = new Error('Insufficient permissions');
@@ -269,7 +297,11 @@ async function login(input) {
   const email = clean(input.email).toLowerCase();
   const password = String(input.password || '');
   const user = await db.get('SELECT * FROM users WHERE LOWER(email) = LOWER(?)', [email]);
-  if (!user || !verifyPassword(password, user.password_hash)) {
+  // An unknown address must cost the same as a wrong password. Skipping the
+  // hash when the user is missing answers in microseconds instead of tens of
+  // milliseconds, which enumerates who has an account here.
+  const passwordMatches = verifyPassword(password, user ? user.password_hash : decoyPasswordHash);
+  if (!user || !passwordMatches) {
     throw unauthorized('Invalid email or password');
   }
   const memberships = await listUserOrganizations(user.id);
@@ -389,16 +421,20 @@ async function createInvitation(session, input, req) {
   ]);
   await addAudit(session, 'invitation.create', 'invitation', id, { email, role });
 
-  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
-  const protocol = forwardedProto || 'http';
-  const hostName = req.headers.host || `localhost:${port}`;
   return {
     id,
     email,
     role,
     expiresAt,
-    inviteUrl: `${protocol}://${hostName}/?invite=${encodeURIComponent(token)}`
+    inviteUrl: `${inviteBaseUrl(req)}/?invite=${encodeURIComponent(token)}`
   };
+}
+
+function inviteBaseUrl(req) {
+  if (publicUrl) return publicUrl;
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const protocol = forwardedProto || 'http';
+  return `${protocol}://${req.headers.host || `localhost:${port}`}`;
 }
 
 async function acceptInvitation(input) {
@@ -565,7 +601,7 @@ async function listAssets(organizationId) {
            a.status, a.person_id AS "personId", a.created_at AS "createdAt", a.updated_at AS "updatedAt",
            p.first_name AS "personFirstName", p.last_name AS "personLastName"
     FROM assets a
-    LEFT JOIN people p ON p.id = a.person_id
+    LEFT JOIN people p ON p.id = a.person_id AND p.organization_id = a.organization_id
     WHERE a.organization_id = ?
     ORDER BY LOWER(a.asset_tag)
   `, [organizationId]);
