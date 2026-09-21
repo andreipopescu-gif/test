@@ -11,16 +11,25 @@ let runtimeExcludedNameRules = DEFAULT_EXCLUDED_NAME_RULES.map((rule) => ({
   tokens: [...rule.tokens]
 }));
 
-export function setRuntimeExcludedUsers({ emails, nameRules } = {}) {
+/**
+ * `useDefaults: false` drops the built-in company-specific lists. Multi-tenant
+ * hosts must opt out so one customer's exclusions never hide another's people.
+ */
+export function setRuntimeExcludedUsers({ emails, nameRules, useDefaults = true } = {}) {
+  const fallbackEmails = useDefaults ? [...DEFAULT_EXCLUDED_EMAILS] : [];
+  const fallbackNameRules = useDefaults
+    ? DEFAULT_EXCLUDED_NAME_RULES.map((rule) => ({ id: rule.id, tokens: [...rule.tokens] }))
+    : [];
+
   runtimeExcludedEmails = Array.isArray(emails) && emails.length
     ? emails.map((value) => String(value ?? '').trim().toLowerCase()).filter(Boolean)
-    : [...DEFAULT_EXCLUDED_EMAILS];
+    : fallbackEmails;
   runtimeExcludedNameRules = Array.isArray(nameRules) && nameRules.length
     ? nameRules.map((rule, index) => ({
         id: rule.id || `rule-${index}`,
         tokens: (rule.tokens || []).map((token) => String(token ?? '').trim().toLowerCase()).filter(Boolean)
       })).filter((rule) => rule.tokens.length)
-    : DEFAULT_EXCLUDED_NAME_RULES.map((rule) => ({ id: rule.id, tokens: [...rule.tokens] }));
+    : fallbackNameRules;
 }
 
 export function shouldSkipImportedUser(person = {}) {

@@ -24,6 +24,8 @@ const port = Number(process.env.PORT || 8090);
 if (process.env.NODE_ENV === 'production' && !process.env.SAAS_JWT_SECRET) {
   throw new Error('SAAS_JWT_SECRET is required in production');
 }
+const allowRegistration = process.env.SAAS_ALLOW_REGISTRATION !== 'false';
+const maxUploadBytes = Number(process.env.SAAS_MAX_UPLOAD_MB || 10) * 1024 * 1024;
 
 const db = await openDatabase();
 const rateLimits = new Map();
@@ -72,6 +74,11 @@ async function handleApi(req, res, url) {
   }
 
   if (method === 'POST' && path === '/api/auth/register') {
+    if (!allowRegistration) {
+      const error = new Error('Self-service registration is disabled. Ask for an invitation.');
+      error.status = 403;
+      throw error;
+    }
     enforceRateLimit(req, 'auth', 20, 15 * 60_000);
     return sendJson(res, await register(await readJson(req)), 201);
   }
@@ -121,7 +128,7 @@ async function handleApi(req, res, url) {
   if (method === 'POST' && path === '/api/import/preview') {
     requireRole(session, ['admin', 'it']);
     enforceRateLimit(req, 'upload', 30, 60 * 60_000);
-    const upload = await readMultipartForm(req);
+    const upload = await readMultipartForm(req, maxUploadBytes);
     if (!upload.file.originalName.toLowerCase().endsWith('.csv')) {
       throw badRequest('Only CSV files are supported in the SaaS MVP');
     }

@@ -2,6 +2,14 @@ import { parseCsv } from '../../src/import/csv-parser.js';
 import { detectSource } from '../../src/import/detect-source.js';
 import { mapIntuneRows } from '../../src/import/intune-mapper.js';
 import { mapJamfRows } from '../../src/import/jamf-mapper.js';
+import { setRuntimeExcludedUsers } from '../../src/import/excluded-users.js';
+import { setRuntimeIdentityGroups } from '../../src/import/known-person-aliases.js';
+
+// The shared import modules ship with defaults for the original single-company
+// deployment. A multi-client host must start from empty lists, otherwise one
+// customer's exclusions and aliases would silently apply to every organization.
+setRuntimeExcludedUsers({ emails: [], nameRules: [], useDefaults: false });
+setRuntimeIdentityGroups([], { useDefaults: false });
 
 export function buildSaasImportPreview({
   buffer,

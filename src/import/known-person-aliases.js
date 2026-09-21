@@ -9,13 +9,19 @@ let runtimeIdentityGroups = DEFAULT_IDENTITY_GROUPS.map((group) => ({
   lastName: group.lastName || ''
 }));
 
-export function setRuntimeIdentityGroups(groups) {
+/**
+ * `useDefaults: false` clears the built-in company-specific alias groups, which
+ * multi-tenant hosts need so identities are never merged across customers.
+ */
+export function setRuntimeIdentityGroups(groups, { useDefaults = true } = {}) {
   if (!Array.isArray(groups) || !groups.length) {
-    runtimeIdentityGroups = DEFAULT_IDENTITY_GROUPS.map((group) => ({
-      emails: [...group.emails],
-      firstName: group.firstName || '',
-      lastName: group.lastName || ''
-    }));
+    runtimeIdentityGroups = useDefaults
+      ? DEFAULT_IDENTITY_GROUPS.map((group) => ({
+          emails: [...group.emails],
+          firstName: group.firstName || '',
+          lastName: group.lastName || ''
+        }))
+      : [];
     return;
   }
   runtimeIdentityGroups = groups.map((group) => ({

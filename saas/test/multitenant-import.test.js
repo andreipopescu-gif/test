@@ -176,6 +176,25 @@ test('two organizations stay isolated through CRUD, roles and CSV import', { tim
     });
     assert.ok((await jsonRequest(baseUrl, '/api/assets', { token: orgB.token })).length > 1);
 
+    // A different customer may legitimately employ someone the original
+    // single-company deployment excluded; SaaS must not silently drop them.
+    const excludedNameCsv = [
+      'Serial number,Device name,Manufacturer,Model,OS,Primary user UPN,Primary user display name',
+      'SN-EXCLUDED-1,LAPTOP-1,Lenovo,ThinkPad X1,Windows,luminita.klein@beta.test,Luminita Klein'
+    ].join('\r\n');
+    const excludedForm = new FormData();
+    excludedForm.set('source', 'intune');
+    excludedForm.set('file', new Blob([excludedNameCsv], { type: 'text/csv' }), 'excluded.csv');
+    const excludedPreviewResponse = await fetch(`${baseUrl}/api/import/preview`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${orgB.token}` },
+      body: excludedForm
+    });
+    assert.equal(excludedPreviewResponse.status, 201);
+    const excludedPreview = await excludedPreviewResponse.json();
+    assert.equal(excludedPreview.rows[0].person?.email, 'luminita.klein@beta.test');
+    assert.equal(excludedPreview.rows[0].personMatch, 'new');
+
     const audit = await jsonRequest(baseUrl, '/api/audit', { token: orgA.token });
     assert.ok(audit.some((item) => item.action === 'import.apply'));
     assert.ok(audit.every((item) => !String(item.userEmail || '').includes('beta@')));
