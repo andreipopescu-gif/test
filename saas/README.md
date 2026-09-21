@@ -19,7 +19,8 @@ The offline Windows app stays on branch `local` (same repo).
   missing from the last MDM import, Teams Rooms) and a full device export
 - People merge that moves devices, assignment history and alternate addresses
 - Intune/Jamf CSV **or ZIP** preview + transactional apply per organization,
-  including owner changes and a flag for devices the MDM stopped reporting
+  including catalog model resolution, owner changes and a flag for devices the
+  MDM stopped reporting
 - Entra / Intune user CSV import for the people directory
 - Audit log for mutations, assignments and imports
 - Self-service password change that ends every other session
@@ -30,8 +31,6 @@ The offline Windows app stays on branch `local` (same repo).
 ## What is not here yet
 
 - Invoice PDF import, PV DOCX handover documents, JSON backup/restore
-- Catalog model resolution during import (rows keep the raw model text and a
-  device is linked to a catalog model by hand)
 - Microsoft/Google SSO
 - Hosted Intune/Jamf sync
 - Billing

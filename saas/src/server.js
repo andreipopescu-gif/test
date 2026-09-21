@@ -1306,10 +1306,11 @@ async function deleteAsset(organizationId, id) {
 }
 
 async function createImportPreview(session, upload) {
-  const [existingAssets, existingPeople, policy] = await Promise.all([
+  const [existingAssets, existingPeople, policy, catalog] = await Promise.all([
     listAssets(session.organizationId),
     listPeople(session.organizationId),
-    loadImportPolicy(session.organizationId)
+    loadImportPolicy(session.organizationId),
+    listCatalog(db, session.organizationId)
   ]);
   const preview = buildSaasImportPreview({
     buffer: upload.file.buffer,
@@ -1317,6 +1318,7 @@ async function createImportPreview(session, upload) {
     source: upload.fields.source || 'auto',
     existingAssets,
     existingPeople,
+    catalog,
     policy
   });
   const batchId = randomUUID();
@@ -1458,13 +1460,18 @@ async function applyImportBatch(session, input) {
         const previousPersonId = existing.person_id || null;
         await tx.run(`
           UPDATE assets
-          SET asset_tag = ?, model_name = ?, status = ?, person_id = ?,
+          SET asset_tag = ?, model_name = ?, model_id = COALESCE(?, model_id),
+              brand = COALESCE(?, brand), category = COALESCE(?, category),
+              status = ?, person_id = ?,
               external_ids_json = ?, import_meta_json = ?, updated_at = ?,
               ${importedAssetFields.map(([column]) => `${column} = COALESCE(?, ${column})`).join(', ')}
           WHERE id = ? AND organization_id = ?
         `, [
           row.assetTag,
           row.modelName,
+          clean(row.modelId) || null,
+          clean(row.brand) || null,
+          clean(row.category) || null,
           personId ? 'assigned' : existing.status,
           personId,
           JSON.stringify(mergeJson(existing.external_ids_json, externalIds)),
@@ -1486,16 +1493,19 @@ async function applyImportBatch(session, input) {
         const assetId = randomUUID();
         await tx.run(`
           INSERT INTO assets (
-            id, organization_id, asset_tag, serial_number, model_name,
+            id, organization_id, asset_tag, serial_number, model_name, model_id, brand, category,
             status, person_id, external_ids_json, import_meta_json, created_at, updated_at,
             ${importedAssetFields.map(([column]) => column).join(', ')}
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${importedAssetFields.map(() => '?').join(', ')})
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${importedAssetFields.map(() => '?').join(', ')})
         `, [
           assetId,
           session.organizationId,
           row.assetTag,
           row.serialNumber,
           row.modelName,
+          clean(row.modelId) || null,
+          clean(row.brand) || null,
+          clean(row.category) || null,
           personId ? 'assigned' : 'in_stock',
           personId,
           JSON.stringify(externalIds),
@@ -1557,7 +1567,6 @@ async function applyImportBatch(session, input) {
 // Hardware fields the mappers can fill in. COALESCE on update keeps a value a
 // human typed when the export has nothing to say about that column.
 const importedAssetFields = [
-  ['category', 'category'],
   ['operating_system', 'operatingSystem'],
   ['ram_gb', 'ramGb'],
   ['storage_gb', 'storageGb'],

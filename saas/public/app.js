@@ -955,8 +955,8 @@ function renderImport() {
         <h2>Preview ${escapeHtml(preview.source.toUpperCase())}</h2>
         <p class="lede">
           ${preview.summary.create} create · ${preview.summary.update} update ·
-          ${preview.summary.reassign || 0} reassign · ${preview.summary.skip} skip ·
-          ${preview.summary.warnings} with warnings
+          ${preview.summary.reassign || 0} reassign · ${preview.summary.needsReview || 0} need review ·
+          ${preview.summary.skip} skip · ${preview.summary.warnings} with warnings
         </p>
         <div class="actions">
           <button id="applyImport" class="primary" type="button">Apply selected rows</button>
@@ -969,16 +969,20 @@ function renderImport() {
                 <th></th><th>Line</th><th>Action</th>
                 ${preview.kind === 'users'
                   ? '<th>Email</th><th>Name</th><th>Department</th><th>Match</th>'
-                  : '<th>Serial</th><th>Asset</th><th>Model</th><th>Person</th>'}
+                  : '<th>Serial</th><th>Asset</th><th>Model</th><th>Match</th><th>Person</th>'}
                 <th>Warnings</th>
               </tr>
             </thead>
             <tbody>
               ${preview.rows.map((row) => `
                 <tr>
-                  <td><input type="checkbox" data-import-row="${row.id}" ${row.action !== 'skip' ? 'checked' : 'disabled'}></td>
+                  <td><input type="checkbox" data-import-row="${row.id}" ${
+                    row.action !== 'skip' && row.action !== 'needs_review' ? 'checked' : 'disabled'
+                  }></td>
                   <td>${escapeHtml(row.line)}</td>
-                  <td><span class="badge ${row.action === 'skip' ? 'inactive' : 'assigned'}">${escapeHtml(row.action)}</span></td>
+                  <td><span class="badge ${
+                    row.action === 'skip' || row.action === 'needs_review' ? 'inactive' : 'assigned'
+                  }">${escapeHtml(row.action)}</span></td>
                   ${preview.kind === 'users' ? `
                     <td>${escapeHtml(row.email || '—')}</td>
                     <td>${escapeHtml(row.displayName || `${row.firstName} ${row.lastName}`)}</td>
@@ -988,6 +992,7 @@ function renderImport() {
                     <td>${escapeHtml(row.serialNumber || '—')}</td>
                     <td>${escapeHtml(row.assetTag || '—')}</td>
                     <td>${escapeHtml(row.modelName || '—')}</td>
+                    <td>${escapeHtml(row.modelMatch || '—')}</td>
                     <td>${escapeHtml(row.person?.email || '—')}</td>
                   `}
                   <td>${escapeHtml((row.warnings || []).join('; '))}</td>

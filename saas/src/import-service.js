@@ -8,6 +8,8 @@ import { mapIntuneUserRows } from '../../src/import/intune-user-mapper.js';
 import { shouldSkipImportedUser } from '../../src/import/excluded-users.js';
 import { emptyImportPolicy } from '../../src/import/import-policy.js';
 import { isZip, extractFirstCsvFromZip } from '../../src/import/zip-reader.js';
+import { resolveModel } from '../../src/import/model-resolver.js';
+import { asResolverCatalog, modelLabel } from './catalog.js';
 
 export const IMPORT_SOURCES = ['auto', 'intune', 'jamf'];
 export const USER_IMPORT_SOURCES = ['auto', 'entra', 'intune_users'];
@@ -23,6 +25,7 @@ export function buildSaasImportPreview({
   source = 'auto',
   existingAssets = [],
   existingPeople = [],
+  catalog = { categories: [], brands: [], models: [] },
   policy = emptyImportPolicy()
 }) {
   // `source` arrives as a multipart form field. Unvalidated it reaches
@@ -40,6 +43,7 @@ export function buildSaasImportPreview({
     ? mapIntuneRows(parsed.records, 'all', policy)
     : mapJamfRows(parsed.records, 'all');
 
+  const resolverCatalog = asResolverCatalog(catalog);
   const assetsBySerial = new Map(
     existingAssets
       .filter((asset) => asset.serialNumber)
@@ -103,16 +107,42 @@ export function buildSaasImportPreview({
       warnings.push('Device changes owner. The current assignment will be closed.');
     }
 
+    const rowKey = `${detectedSource}:${normalized.serialNumber || normalized.externalId || normalized.line}`;
+    const overrideModelId = policy.modelOverrides?.[rowKey]
+      || policy.modelOverrides?.[normalized.serialNumber]
+      || policy.modelOverrides?.[normalized.externalId]
+      || policy.modelOverrides?.[String(normalized.line)];
+    const resolution = resolveModel(resolverCatalog, {
+      ...normalized,
+      source: detectedSource
+    }, overrideModelId ? { [normalized.serialNumber]: overrideModelId } : {});
+    warnings.push(...(resolution.warnings || []));
+    const needsReview = action !== 'skip' && !resolution.model;
+    if (needsReview) action = 'needs_review';
+
+    const resolvedLabel = resolution.model
+      ? modelLabel(resolution.model, resolverCatalog.brands)
+      : '';
+
     return {
-      rowKey: `${detectedSource}:${normalized.serialNumber || normalized.externalId || normalized.line}`,
+      rowKey,
       line: normalized.line,
       action,
+      needsReview,
       source: detectedSource,
       serialNumber: clean(normalized.serialNumber),
       assetTag: clean(normalized.assetTag) || clean(normalized.serialNumber),
-      modelName: clean(normalized.model || normalized.modelIdentifier),
+      modelId: resolution.model?.id || '',
+      modelMatch: resolution.match || 'none',
+      modelName: resolvedLabel || clean(normalized.model || normalized.modelIdentifier),
       manufacturer: clean(normalized.manufacturer),
-      category: clean(normalized.mtrRegion ? `MTR ${normalized.mtrRegion}` : ''),
+      category: clean(
+        resolution.model?.deviceType
+          || (normalized.mtrRegion ? `MTR ${normalized.mtrRegion}` : '')
+      ),
+      brand: clean(
+        resolverCatalog.brands.find((brand) => brand.id === resolution.model?.brandId)?.name || ''
+      ),
       operatingSystem: [normalized.os, normalized.osVersion].filter(Boolean).join(' ').trim(),
       ramGb: gigabytes(normalized.ram),
       storageGb: gigabytes(normalized.storage),
@@ -256,6 +286,7 @@ function summarize(rows, total) {
     create: rows.filter((row) => row.action === 'create').length,
     update: rows.filter((row) => row.action === 'update').length,
     reassign: rows.filter((row) => row.action === 'reassign').length,
+    needsReview: rows.filter((row) => row.action === 'needs_review').length,
     skip: rows.filter((row) => row.action === 'skip').length,
     warnings: rows.filter((row) => row.warnings.length).length
   };

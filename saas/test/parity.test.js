@@ -221,6 +221,8 @@ test('an Intune import keeps hardware detail and flags devices that stopped repo
     const preview = await api.preview(admin.token, first);
     assert.equal(preview.summary.create, 2);
     assert.equal(preview.rows[0].operatingSystem, 'Windows 11');
+    assert.ok(preview.rows[0].modelId, 'resolved catalog model id');
+    assert.notEqual(preview.rows[0].action, 'needs_review');
     await api.apply(admin.token, preview);
 
     const assets = await api.get('/api/assets', admin.token);
@@ -228,6 +230,7 @@ test('an Intune import keeps hardware detail and flags devices that stopped repo
     assert.equal(first1.operatingSystem, 'Windows 11');
     assert.equal(first1.storageGb, 477);
     assert.equal(first1.enrolledAt, '2026-01-02');
+    assert.ok(first1.modelId);
     assert.equal(first1.importMeta.source, 'intune');
     assert.equal(first1.importMeta.missingFromLastImport, false);
 

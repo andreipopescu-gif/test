@@ -46,7 +46,10 @@ export async function ensureCatalogSeeded(db, organizationId) {
         `, [brandId, organizationId, categoryId, catalogKey(brand.name), clean(brand.name)]);
 
         for (const model of brand.models || []) {
-          const name = modelDisplayName(model.name, model.generation);
+          // Keep the seed's base name + generation separate so the shared
+          // model-resolver can match Intune/Jamf rows the same way the offline
+          // app does. Display labels are composed at the edge.
+          const name = clean(model.name);
           await tx.run(`
             INSERT INTO catalog_models (id, organization_id, brand_id, key, name, aliases_json)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -55,9 +58,9 @@ export async function ensureCatalogSeeded(db, organizationId) {
             randomUUID(),
             organizationId,
             brandId,
-            catalogKey(name),
+            catalogKey(`${name} ${clean(model.generation)}`.trim()),
             name,
-            JSON.stringify(modelAliases(model))
+            JSON.stringify(modelMeta(model))
           ]);
         }
       }
@@ -91,28 +94,57 @@ export async function listCatalog(db, organizationId) {
   return {
     categories,
     brands,
-    models: models.map((model) => ({
+    models: models.map((model) => decorateModel(model))
+  };
+}
+
+/**
+ * Shape the SaaS catalogue for `src/import/model-resolver.js`, which expects
+ * the offline fields `generation` and `deviceType` on every model.
+ */
+export function asResolverCatalog(catalog) {
+  return {
+    categories: catalog.categories,
+    brands: catalog.brands,
+    models: catalog.models.map((model) => ({
       id: model.id,
       brandId: model.brandId,
-      categoryId: model.categoryId,
-      key: model.key,
       name: model.name,
-      aliases: parseAliases(model.aliasesJson)
+      generation: model.generation || 'Standard',
+      deviceType: model.deviceType || '',
+      aliases: model.aliases || []
     }))
   };
 }
 
+export function modelLabel(model, brands = []) {
+  if (!model) return '';
+  const brand = brands.find((item) => item.id === model.brandId);
+  const generation = clean(model.generation);
+  const suffix = generation && generation !== 'Standard' ? ` ${generation}` : '';
+  return `${clean(brand?.name)} ${clean(model.name)}${suffix}`.trim();
+}
+
 export async function getCatalogModel(db, organizationId, modelId) {
   const row = await db.get(`
-    SELECT m.id, m.brand_id AS "brandId", m.name, m.aliases_json AS "aliasesJson",
-           b.name AS "brandName", c.id AS "categoryId", c.name AS "categoryName"
+    SELECT m.id, m.brand_id AS "brandId", m.key, m.name, m.aliases_json AS "aliasesJson",
+           b.name AS "brandName", b.category_id AS "categoryId",
+           c.name AS "categoryName"
     FROM catalog_models m
     JOIN catalog_brands b ON b.id = m.brand_id AND b.organization_id = m.organization_id
     JOIN catalog_categories c ON c.id = b.category_id AND c.organization_id = m.organization_id
     WHERE m.id = ? AND m.organization_id = ?
   `, [modelId, organizationId]);
   if (!row) return null;
-  return { ...row, aliases: parseAliases(row.aliasesJson), aliasesJson: undefined };
+  const decorated = decorateModel(row);
+  return {
+    ...decorated,
+    brandName: row.brandName,
+    categoryName: row.categoryName,
+    label: `${clean(row.brandName)} ${decorated.name}${
+      decorated.generation && decorated.generation !== 'Standard' ? ` ${decorated.generation}` : ''
+    }`.trim()
+  };
 }
 
 /**
@@ -140,21 +172,26 @@ export async function createCatalogModel(db, organizationId, input) {
     brand = { id: await upsertBrand(db, organizationId, categoryId, brandName), categoryId };
   }
 
-  const key = catalogKey(name);
+  const aliases = Array.isArray(input.aliases)
+    ? [...new Set(input.aliases.map(clean).filter(Boolean))]
+    : [];
+  const generation = clean(input.generation) || 'Standard';
+  const deviceType = clean(input.deviceType);
+  const key = catalogKey(`${name} ${generation}`);
   const existing = await db.get(
     'SELECT id FROM catalog_models WHERE organization_id = ? AND brand_id = ? AND key = ?',
     [organizationId, brand.id, key]
   );
-  const aliases = Array.isArray(input.aliases)
-    ? [...new Set(input.aliases.map(clean).filter(Boolean))]
-    : [];
+  const meta = {
+    generation,
+    deviceType,
+    aliases
+  };
   if (existing) {
-    if (aliases.length) {
-      await db.run('UPDATE catalog_models SET aliases_json = ? WHERE id = ?', [
-        JSON.stringify(aliases),
-        existing.id
-      ]);
-    }
+    await db.run('UPDATE catalog_models SET aliases_json = ? WHERE id = ?', [
+      JSON.stringify(meta),
+      existing.id
+    ]);
     return getCatalogModel(db, organizationId, existing.id);
   }
 
@@ -162,7 +199,7 @@ export async function createCatalogModel(db, organizationId, input) {
   await db.run(`
     INSERT INTO catalog_models (id, organization_id, brand_id, key, name, aliases_json)
     VALUES (?, ?, ?, ?, ?, ?)
-  `, [id, organizationId, brand.id, key, name, JSON.stringify(aliases)]);
+  `, [id, organizationId, brand.id, catalogKey(`${name} ${generation}`), name, JSON.stringify(meta)]);
   return getCatalogModel(db, organizationId, id);
 }
 
@@ -205,25 +242,59 @@ export function catalogKey(value) {
     .replace(/^-|-$/g, '');
 }
 
-function modelDisplayName(name, generation) {
-  const base = clean(name);
-  const gen = clean(generation);
-  if (!gen || gen === 'Standard' || base.toLowerCase().includes(gen.toLowerCase())) return base;
-  return `${base} ${gen}`;
+function modelMeta(model) {
+  return {
+    generation: clean(model.generation) || 'Standard',
+    deviceType: clean(model.deviceType),
+    aliases: [...new Set([clean(model.name), clean(model.deviceType)].filter(Boolean))]
+  };
 }
 
-function modelAliases(model) {
-  return [...new Set([clean(model.name), clean(model.deviceType)].filter(Boolean))];
+function decorateModel(model) {
+  const meta = parseModelMeta(model.aliasesJson);
+  const split = splitFlattenedName(model.name, meta.generation);
+  return {
+    id: model.id,
+    brandId: model.brandId,
+    categoryId: model.categoryId,
+    key: model.key,
+    name: split.name,
+    generation: split.generation,
+    deviceType: meta.deviceType || '',
+    aliases: meta.aliases
+  };
 }
 
-function parseAliases(raw) {
-  if (Array.isArray(raw)) return raw;
-  try {
-    const parsed = JSON.parse(raw || '[]');
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
+function parseModelMeta(raw) {
+  if (Array.isArray(raw)) {
+    return {
+      generation: 'Standard',
+      deviceType: raw.find((item) => /^(laptop|telefon|phone|mtr)/i.test(String(item))) || '',
+      aliases: raw.map(clean).filter(Boolean)
+    };
   }
+  try {
+    const parsed = JSON.parse(raw || '{}');
+    if (Array.isArray(parsed)) {
+      return parseModelMeta(parsed);
+    }
+    return {
+      generation: clean(parsed.generation) || 'Standard',
+      deviceType: clean(parsed.deviceType),
+      aliases: Array.isArray(parsed.aliases) ? parsed.aliases.map(clean).filter(Boolean) : []
+    };
+  } catch {
+    return { generation: 'Standard', deviceType: '', aliases: [] };
+  }
+}
+
+function splitFlattenedName(name, fallbackGeneration = 'Standard') {
+  const text = clean(name);
+  const match = text.match(/^(.*?)(?:\s+(Gen\s+\d+|M\d(?:\s+(?:Pro|Max|Ultra))?|\d+(?:st|nd|rd|th)\s+gen|Pro Max|Pro|Plus|Standard))$/i);
+  if (match) {
+    return { name: clean(match[1]), generation: clean(match[2]) || fallbackGeneration };
+  }
+  return { name: text, generation: clean(fallbackGeneration) || 'Standard' };
 }
 
 function clean(value) {
