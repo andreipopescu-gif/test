@@ -1,0 +1,154 @@
+{
+  "categories": [
+    {
+      "name": "Laptop",
+      "brands": [
+        {
+          "name": "Lenovo",
+          "models": [
+            { "name": "ThinkPad T14", "generation": "Gen 1", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14", "generation": "Gen 2", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14", "generation": "Gen 3", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14", "generation": "Gen 4", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14", "generation": "Gen 5", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14", "generation": "Gen 6", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14s", "generation": "Gen 1", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14s", "generation": "Gen 2", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14s", "generation": "Gen 3", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14s", "generation": "Gen 4", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14s", "generation": "Gen 5", "deviceType": "Laptop" },
+            { "name": "ThinkPad X1 Carbon", "generation": "Gen 9", "deviceType": "Laptop" },
+            { "name": "ThinkPad X1 Carbon", "generation": "Gen 10", "deviceType": "Laptop" },
+            { "name": "ThinkPad X1 Carbon", "generation": "Gen 11", "deviceType": "Laptop" },
+            { "name": "ThinkPad X1 Carbon", "generation": "Gen 12", "deviceType": "Laptop" },
+            { "name": "ThinkPad X1 Yoga", "generation": "Gen 6", "deviceType": "Laptop" },
+            { "name": "ThinkPad X1 Yoga", "generation": "Gen 7", "deviceType": "Laptop" },
+            { "name": "ThinkPad X1 Yoga", "generation": "Gen 8", "deviceType": "Laptop" },
+            { "name": "ThinkPad X1 2-in-1", "generation": "Gen 9", "deviceType": "Laptop" },
+            { "name": "ThinkPad X1 2-in-1", "generation": "Gen 10", "deviceType": "Laptop" },
+            { "name": "ThinkPad X13", "generation": "Gen 1", "deviceType": "Laptop" },
+            { "name": "ThinkPad X13", "generation": "Gen 2", "deviceType": "Laptop" },
+            { "name": "ThinkPad X13", "generation": "Gen 3", "deviceType": "Laptop" },
+            { "name": "ThinkPad X13", "generation": "Gen 4", "deviceType": "Laptop" },
+            { "name": "ThinkPad X13", "generation": "Gen 5", "deviceType": "Laptop" },
+            { "name": "ThinkPad X13", "generation": "Gen 6", "deviceType": "Laptop" },
+            { "name": "ThinkPad P1", "generation": "Gen 6", "deviceType": "Laptop" },
+            { "name": "ThinkPad P1", "generation": "Gen 7", "deviceType": "Laptop" },
+            { "name": "ThinkPad P1", "generation": "Gen 8", "deviceType": "Laptop" },
+            { "name": "ThinkPad T470", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "ThinkPad T480", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "ThinkPad T490", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "ThinkPad X240", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "ThinkPad X270", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "ThinkPad L14", "generation": "Gen 1", "deviceType": "Laptop" },
+            { "name": "ThinkPad L14", "generation": "Gen 2", "deviceType": "Laptop" },
+            { "name": "ThinkPad L14", "generation": "Gen 3", "deviceType": "Laptop" },
+            { "name": "ThinkPad L14", "generation": "Gen 4", "deviceType": "Laptop" },
+            { "name": "ThinkPad L14", "generation": "Gen 5", "deviceType": "Laptop" },
+            { "name": "ThinkPad L15", "generation": "Gen 3", "deviceType": "Laptop" },
+            { "name": "ThinkPad L15", "generation": "Gen 4", "deviceType": "Laptop" },
+            { "name": "ThinkPad P14s", "generation": "Gen 2", "deviceType": "Laptop" },
+            { "name": "ThinkPad P14s", "generation": "Gen 3", "deviceType": "Laptop" },
+            { "name": "ThinkPad P14s", "generation": "Gen 4", "deviceType": "Laptop" },
+            { "name": "ThinkPad P14s", "generation": "Gen 5", "deviceType": "Laptop" },
+            { "name": "ThinkPad P16s", "generation": "Gen 1", "deviceType": "Laptop" },
+            { "name": "ThinkPad P16s", "generation": "Gen 2", "deviceType": "Laptop" },
+            { "name": "ThinkPad E14", "generation": "Gen 1", "deviceType": "Laptop" },
+            { "name": "ThinkPad E14", "generation": "Gen 2", "deviceType": "Laptop" },
+            { "name": "ThinkPad E14", "generation": "Gen 3", "deviceType": "Laptop" },
+            { "name": "ThinkPad E14", "generation": "Gen 4", "deviceType": "Laptop" },
+            { "name": "ThinkPad E14", "generation": "Gen 5", "deviceType": "Laptop" },
+            { "name": "ThinkPad E14", "generation": "Gen 6", "deviceType": "Laptop" },
+            { "name": "ThinkPad E15", "generation": "Gen 4", "deviceType": "Laptop" },
+            { "name": "ThinkPad E16", "generation": "Gen 1", "deviceType": "Laptop" },
+            { "name": "ThinkPad E16", "generation": "Gen 2", "deviceType": "Laptop" }
+          ]
+        },
+        {
+          "name": "Apple MacBook",
+          "models": [
+            { "name": "MacBook Air", "generation": "M3", "deviceType": "Laptop" },
+            { "name": "MacBook Air", "generation": "M4", "deviceType": "Laptop" },
+            { "name": "MacBook Air", "generation": "M5", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 14", "generation": "M3", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 14", "generation": "M4", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 14", "generation": "M4 Pro", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 14", "generation": "M5", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 14", "generation": "M5 Pro", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 16", "generation": "M3", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 16", "generation": "M4", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 16", "generation": "M4 Pro", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 16", "generation": "M5", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 16", "generation": "M5 Pro", "deviceType": "Laptop" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Telefon",
+      "brands": [
+        {
+          "name": "Apple iPhone",
+          "models": [
+            { "name": "iPhone SE", "generation": "Standard", "deviceType": "Telefon" },
+            { "name": "iPhone SE", "generation": "2nd gen", "deviceType": "Telefon" },
+            { "name": "iPhone SE", "generation": "3rd gen", "deviceType": "Telefon" },
+            { "name": "iPhone 11", "generation": "Standard", "deviceType": "Telefon" },
+            { "name": "iPhone 13", "generation": "Standard", "deviceType": "Telefon" },
+            { "name": "iPhone 14", "generation": "Standard", "deviceType": "Telefon" },
+            { "name": "iPhone 14 Pro", "generation": "Pro", "deviceType": "Telefon" },
+            { "name": "iPhone 14 Pro Max", "generation": "Pro Max", "deviceType": "Telefon" },
+            { "name": "iPhone 15", "generation": "Standard", "deviceType": "Telefon" },
+            { "name": "iPhone 15 Pro", "generation": "Pro", "deviceType": "Telefon" },
+            { "name": "iPhone 15 Pro Max", "generation": "Pro Max", "deviceType": "Telefon" },
+            { "name": "iPhone 16e", "generation": "Standard", "deviceType": "Telefon" },
+            { "name": "iPhone 16 Pro", "generation": "Pro", "deviceType": "Telefon" }
+          ]
+        },
+        {
+          "name": "Samsung",
+          "models": [
+            { "name": "Samsung", "generation": "Standard", "deviceType": "Telefon" },
+            { "name": "Galaxy S24", "generation": "Standard", "deviceType": "Telefon" }
+          ]
+        },
+        {
+          "name": "Google",
+          "models": [
+            { "name": "Pixel 7", "generation": "Standard", "deviceType": "Telefon" },
+            { "name": "Pixel 10 Pro XL", "generation": "Standard", "deviceType": "Telefon" }
+          ]
+        },
+        {
+          "name": "Xiaomi",
+          "models": [
+            { "name": "Xiaomi", "generation": "Standard", "deviceType": "Telefon" },
+            { "name": "2409BRN2CY", "generation": "Standard", "deviceType": "Telefon" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "MTR RO",
+      "brands": [
+        {
+          "name": "MTR RO",
+          "models": [
+            { "name": "Teams Room", "generation": "Standard", "deviceType": "MTR" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "MTR BG",
+      "brands": [
+        {
+          "name": "MTR BG",
+          "models": [
+            { "name": "Teams Room", "generation": "Standard", "deviceType": "MTR" }
+          ]
+        }
+      ]
+    }
+  ]
+}

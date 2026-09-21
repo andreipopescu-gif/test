@@ -1,0 +1,12 @@
+@echo off
+cd /d "__INSTALL_DIR__"
+set HOST=0.0.0.0
+set PORT=__PORT__
+set ITINV_DB_PATH=__INSTALL_DIR__\data\app.db.json
+set ITINV_UPLOAD_PATH=__INSTALL_DIR__\data\uploads
+"__NODE_PATH__" "__INSTALL_DIR__\src\server.js"
+if errorlevel 1 (
+  echo.
+  echo Eroare la pornire. Verifica portul __PORT__ liber si fisierul data\app.db.json
+  pause
+)

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>IT Inventory</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <strong>IT Inventory</strong>
+        <span>offline, for the IT team</span>
+      </div>
+      <label class="actor">
+        Operator
+        <input id="actorName" placeholder="Your name">
+      </label>
+    </header>
+
+    <main class="layout">
+      <nav class="nav">
+        <button data-route="dashboard" class="active">Dashboard</button>
+        <div class="nav-group" id="devicesNavGroup">
+          <button type="button" class="nav-toggle" id="devicesNavToggle" aria-expanded="false">
+            <span>Devices</span>
+            <span class="nav-chevron" aria-hidden="true">▾</span>
+          </button>
+          <div class="nav-submenu">
+            <button data-route="assets:all" class="nav-sub">All devices</button>
+            <button data-route="assets:phones" class="nav-sub">Phones</button>
+            <button data-route="assets:macbooks" class="nav-sub">MacBooks</button>
+            <button data-route="assets:wims" class="nav-sub">WIMS</button>
+            <button data-route="assets:mtr-ro" class="nav-sub">MTR RO</button>
+            <button data-route="assets:mtr-bg" class="nav-sub">MTR BG</button>
+          </div>
+        </div>
+        <button data-route="people">People</button>
+        <button data-route="handover">PV-uri</button>
+        <button data-route="import">Import</button>
+        <button data-route="reports">Reports</button>
+        <button data-route="settings">Settings</button>
+      </nav>
+      <section id="app" class="content"></section>
+    </main>
+
+    <dialog id="dialog">
+      <form method="dialog">
+        <button class="close" value="cancel">Close</button>
+      </form>
+      <div id="dialogBody"></div>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

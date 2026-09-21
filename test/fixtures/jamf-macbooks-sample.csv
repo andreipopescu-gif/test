@@ -1,0 +1,3 @@
+Computer Name,Serial Number,Make,Model,Model Identifier,Asset Tag,Username,Full Name,Email Address,Department,Position,Operating System,Operating System Version,Total RAM MB,Jamf Pro Computer ID
+MB-AIR-001,C02AIR001,Apple,MacBook Air,"Mac15,13",MB-AIR-001,ioana,Ioana Marin,ioana.marin@example.com,IT,Developer,macOS,15.4,16384,1001
+MB-PRO-001,C02PRO001,Apple,MacBook Pro 14,"Mac16,1",MB-PRO-001,dan,Dan Pavel,dan.pavel@example.com,Finance,Manager,macOS,15.4,32768,1002

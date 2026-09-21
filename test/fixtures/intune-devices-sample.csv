@@ -1,0 +1,4 @@
+Device ID,Device name,Management name,Serial number,Manufacturer,Model,OS,OS version,IMEI,Primary user UPN,Primary user display name,Primary user email address,Last check-in
+intune-1,LEN-T14-001,LEN-T14-001,PF3ABC,LENOVO,21HES4ND09,Windows,11,,ana.popescu@example.com,Ana Popescu,ana.popescu@example.com,2026-05-28
+intune-2,IPH-001,IPH-001,F2LIPHONE,Apple,"iPhone15,4",iOS,18.0,123456789012345,mihai.ionescu@example.com,Mihai Ionescu,mihai.ionescu@example.com,2026-05-28
+intune-3,SAM-001,SAM-001,R5CSAMSUNG,Samsung,Galaxy S24,Android,14,543210987654321,,,,

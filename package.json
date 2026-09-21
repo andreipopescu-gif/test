@@ -1,0 +1,16 @@
+{
+  "name": "it-inventory",
+  "version": "1.0.0",
+  "description": "Aplicatie web offline pentru inventar obiecte IT, rulata doar cu Node.js.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test",
+    "package:windows": "node scripts/package-windows.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
