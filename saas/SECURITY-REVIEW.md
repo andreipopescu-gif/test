@@ -18,6 +18,38 @@ deployment facts, observed on staging). `SUSPECTED` means code reading only.
 What was attacked and held up is in [What is solid](#what-is-solid). Nothing in that
 section is a finding; it is there so the list above is not mistaken for the whole picture.
 
+## Remediation status
+
+The findings below are kept as written at review time. This table is the current
+state; where it disagrees with a finding, the table wins.
+
+| Finding | State | Where |
+| --- | --- | --- |
+| C1 fallback JWT secret | Fixed | `saas/src/auth.js` throws when the secret is missing, in every environment |
+| H1 `X-Forwarded-For` spoofing | Fixed | `clientIp()` counts from the right using `SAAS_TRUSTED_PROXIES` |
+| H2 quadratic CSV cost | Fixed | `src/import/record-lookup.js` indexes each record once; `parseCsv` caps columns and rows |
+| H3 malformed upload limit | Fixed | non-numeric `SAAS_MAX_UPLOAD_MB` falls back to the default |
+| H4 derivable pilot passwords | Fixed | `scripts/seed-test-env.js` generates random passwords per run |
+| H5 open registration | Fixed | production needs an explicit opt-in or the shared registration token |
+| M1 login timing oracle | Fixed | an unknown address is verified against a decoy hash |
+| M2 internal errors returned | Fixed | only deliberate errors keep their message; the rest are logged |
+| M3 unvalidated `source` | Fixed | `buildSaasImportPreview` rejects anything outside the allowlist |
+| M4 no GDPR erasure | Open | needs delete endpoints; see ROADMAP Phase 3 |
+| M5 company defaults in shared import | Partly fixed | SaaS starts from empty lists; ROADMAP Phase 2 removes the global |
+| M6 no `.dockerignore`, runs as root | Fixed | root `.dockerignore`; the image drops to the `node` user |
+| M7 invite token in the URL | Open | needs email delivery first; ROADMAP Phase 1 |
+| M8 no email verification | Open | ROADMAP Phase 1 |
+| L1 scrypt parameters at the floor | Open | needs the stored-parameter format from ROADMAP Phase 1 |
+| L2 fragile `?` rewrite | Watched | now covered by `saas/test/postgres.test.js` |
+| L3 `listAssets` join without org predicate | Fixed | the join is scoped to the same organization |
+| L4 multipart leniency | Open | no exploit found |
+| L5 `uniqueSlug` query per collision | Open | cosmetic until organization counts grow |
+| L6 unauthenticated `/api/ready` load | Fixed | throttled and cached for 5 s |
+
+Two infrastructure items stay open by decision, not oversight: the database and web
+instance remain on free plans, and rate limiting stays in process memory. Both are
+resolved by paid, always-on hosting, which is deliberately deferred.
+
 ---
 
 ## Critical

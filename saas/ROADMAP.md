@@ -7,6 +7,28 @@ PostgreSQL. The free database **expires 2026-10-21** and has no backups.
 Phases are ordered by dependency, not by appetite. Phase 0 is time-boxed by the
 database expiry. Estimates are dev-days for one developer, including tests.
 
+## Spending freeze
+
+No money goes into hosting until the product is complete and working, so every
+Phase 0 item that needs a paid plan is deferred by decision. What that changes:
+
+- the free database still expires **2026-10-21** and is deleted, not
+  downgraded. `npm run backup` is the only copy that survives it, so take a
+  dump before that date even if nothing else happens;
+- staging holds sample and anonymised data only. No client inventory goes onto
+  a free instance with no backups;
+- rate limiting stays best-effort: the free web instance sleeps, which resets
+  the in-memory counters;
+- everything in Phase 0 that is code or configuration is **done**: the
+  migration advisory lock, the registration default, `SAAS_PUBLIC_URL` for
+  invitation links, the backup script and its verified restore. What remains
+  is the plan upgrade itself, `DATABASE_SSL`, and splitting staging from
+  production — all of which start costing money on the day they are done.
+
+Phase 1 work that is free has been pulled forward: CI on every push and pull
+request, with a second job that runs the database tests against a real
+PostgreSQL service.
+
 | Phase | Goal | Days |
 |-------|------|------|
 | 0 | Infrastructure survival: paid Postgres, backups, safe migrations, domain | 3 |

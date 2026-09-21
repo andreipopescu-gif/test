@@ -1,7 +1,10 @@
 databases:
   - name: it-inventory-saas-staging-db
     region: frankfurt
-    # Free tier keeps staging card-free; it expires after 30 days.
+    # Free tier keeps staging card-free. A free database is deleted at expiry
+    # rather than downgraded, with no grace period and no provider backup, so
+    # `npm run backup` (saas/scripts/backup.js) is the only copy that survives
+    # it. Move to a paid plan before putting client data here.
     plan: free
     databaseName: it_inventory_saas
     user: it_inventory_saas
@@ -11,7 +14,9 @@ services:
     name: it-inventory-saas-staging
     runtime: node
     region: frankfurt
-    # Free instance sleeps when idle; first request after sleep is slow.
+    # Free instance sleeps when idle; the first request after sleep is slow and
+    # the in-memory rate-limit counters restart, so treat throttling here as
+    # best effort until this moves to a paid, always-on plan.
     plan: free
     buildCommand: cd saas && npm ci
     startCommand: cd saas && npm start
@@ -31,13 +36,22 @@ services:
         value: 24.9.0
       - key: SAAS_JWT_SECRET
         generateValue: true
+      # With NODE_ENV=production and no SAAS_ALLOW_REGISTRATION, the app keeps
+      # registration closed to anyone without this token. Read it from the
+      # Render dashboard to provision a pilot; never commit it.
       - key: SAAS_REGISTRATION_TOKEN
         generateValue: true
       - key: SAAS_TRUSTED_PROXIES
         value: "1"
+      # Invitation links are built from this instead of the request Host header.
+      - key: SAAS_PUBLIC_URL
+        value: https://it-inventory-saas-staging.onrender.com
       - key: DATABASE_URL
         fromDatabase:
           name: it-inventory-saas-staging-db
           property: connectionString
+      # The database is reached over Render's private network, so TLS is not
+      # negotiated. Set this to "true" together with PGSSL_REJECT_UNAUTHORIZED
+      # the moment the connection leaves that network.
       - key: DATABASE_SSL
         value: "false"
