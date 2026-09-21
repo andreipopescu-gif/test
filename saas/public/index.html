@@ -3,18 +3,26 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>IT Inventory SaaS</title>
-    <link rel="stylesheet" href="/styles.css">
+    <meta name="color-scheme" content="light">
+    <title>IT Inventory</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/styles.css?v=ui3">
   </head>
   <body>
-    <header class="topbar">
-      <div>
-        <strong>IT Inventory</strong>
-        <span class="muted">SaaS MVP</span>
-      </div>
-      <div id="sessionLabel" class="muted"></div>
+    <div class="atmosphere" aria-hidden="true"></div>
+    <header class="topbar" id="topbar">
+      <a class="brand" href="/" id="brandLink">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-text">
+          <span class="brand-name">IT Inventory</span>
+          <span class="brand-tag">Asset control</span>
+        </span>
+      </a>
+      <div id="sessionLabel" class="session"></div>
     </header>
     <main id="app" class="layout"></main>
-    <script type="module" src="/app.js"></script>
+    <script type="module" src="/app.js?v=ui3"></script>
   </body>
 </html>

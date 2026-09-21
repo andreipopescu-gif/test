@@ -31,33 +31,48 @@ async function boot() {
   }
 }
 
+function setAuthMode(enabled) {
+  document.body.classList.toggle('auth-mode', enabled);
+}
+
 function renderAuth() {
+  setAuthMode(true);
   sessionLabel.textContent = '';
   app.innerHTML = `
-    <section class="panel">
-      <h1>Create organization</h1>
-      <p class="muted">Multi-client MVP — each company gets its own isolated data.</p>
-      <form id="registerForm" class="grid">
-        <label>Organization <input name="orgName" required placeholder="Acme IT"></label>
-        <label>Your name <input name="name" required placeholder="Alex Pop"></label>
-        <label>Email <input name="email" type="email" required></label>
-        <label>Password <input name="password" type="password" minlength="8" required></label>
-        <div class="actions" style="grid-column:1/-1">
-          <button class="primary">Register</button>
-        </div>
-      </form>
-      <p id="authError" class="error"></p>
-    </section>
-    <section class="panel">
-      <h2>Already have an account?</h2>
-      <form id="loginForm" class="grid">
-        <label>Email <input name="email" type="email" required></label>
-        <label>Password <input name="password" type="password" required></label>
-        <div class="actions" style="grid-column:1/-1">
-          <button class="primary">Log in</button>
-        </div>
-      </form>
-    </section>
+    <div class="auth-shell">
+      <section class="auth-hero" aria-label="Product">
+        <p class="auth-kicker">Multi-tenant inventory</p>
+        <h1>IT Inventory</h1>
+        <p>People, devices, and imports — isolated per organization.</p>
+      </section>
+      <div class="auth-panel">
+        <section class="auth-card">
+          <h2>Create organization</h2>
+          <p class="lede">Start a workspace. Each company keeps its own data.</p>
+          <form id="registerForm" class="grid">
+            <label>Organization <input name="orgName" required placeholder="Acme IT" autocomplete="organization"></label>
+            <label>Your name <input name="name" required placeholder="Alex Pop" autocomplete="name"></label>
+            <label>Email <input name="email" type="email" required autocomplete="email"></label>
+            <label>Password <input name="password" type="password" minlength="8" required autocomplete="new-password"></label>
+            <div class="actions span-all">
+              <button class="primary" type="submit">Register</button>
+            </div>
+          </form>
+          <p id="authError" class="error" role="alert"></p>
+        </section>
+        <section class="auth-card">
+          <h2>Sign in</h2>
+          <p class="lede">Already have an account?</p>
+          <form id="loginForm" class="grid">
+            <label>Email <input name="email" type="email" required autocomplete="username"></label>
+            <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
+            <div class="actions span-all">
+              <button class="primary" type="submit">Log in</button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </div>
   `;
   document.querySelector('#registerForm').addEventListener('submit', onRegister);
   document.querySelector('#loginForm').addEventListener('submit', onLogin);
@@ -99,18 +114,29 @@ async function acceptSession(result) {
 }
 
 function renderOrganizationChoice(result, credentials) {
+  setAuthMode(true);
   app.innerHTML = `
-    <section class="panel">
-      <h1>Select organization</h1>
-      <p class="muted">${escapeHtml(result.user.email)} belongs to multiple organizations.</p>
-      <div class="actions">
-        ${result.organizations.map((org) => `
-          <button type="button" data-login-org="${org.id}">
-            ${escapeHtml(org.name)} · ${escapeHtml(org.role)}
-          </button>
-        `).join('')}
+    <div class="auth-shell">
+      <section class="auth-hero" aria-label="Product">
+        <p class="auth-kicker">Choose workspace</p>
+        <h1>IT Inventory</h1>
+        <p>This account belongs to more than one organization.</p>
+      </section>
+      <div class="auth-panel">
+        <section class="auth-card">
+          <h2>Select organization</h2>
+          <p class="lede">${escapeHtml(result.user.email)}</p>
+          <div class="org-choice">
+            ${result.organizations.map((org) => `
+              <button type="button" data-login-org="${org.id}">
+                ${escapeHtml(org.name)}
+                <span class="role">${escapeHtml(org.role)}</span>
+              </button>
+            `).join('')}
+          </div>
+        </section>
       </div>
-    </section>
+    </div>
   `;
   document.querySelectorAll('[data-login-org]').forEach((button) => {
     button.addEventListener('click', async () => {
@@ -127,20 +153,30 @@ function renderOrganizationChoice(result, credentials) {
 }
 
 function renderInvitation(token) {
+  setAuthMode(true);
   sessionLabel.textContent = '';
   app.innerHTML = `
-    <section class="panel">
-      <h1>Accept invitation</h1>
-      <p class="muted">If you already have an account, enter its password. Otherwise choose a new password.</p>
-      <form id="acceptInviteForm" class="grid">
-        <label>Your name <input name="name"></label>
-        <label>Password <input name="password" type="password" minlength="8" required></label>
-        <div class="actions" style="grid-column:1/-1">
-          <button class="primary">Accept invitation</button>
-        </div>
-      </form>
-      <p id="inviteError" class="error"></p>
-    </section>
+    <div class="auth-shell">
+      <section class="auth-hero" aria-label="Product">
+        <p class="auth-kicker">Invitation</p>
+        <h1>IT Inventory</h1>
+        <p>Join your organization’s inventory workspace.</p>
+      </section>
+      <div class="auth-panel">
+        <section class="auth-card">
+          <h2>Accept invitation</h2>
+          <p class="lede">If you already have an account, enter its password. Otherwise choose a new one.</p>
+          <form id="acceptInviteForm" class="grid">
+            <label>Your name <input name="name" autocomplete="name"></label>
+            <label>Password <input name="password" type="password" minlength="8" required autocomplete="new-password"></label>
+            <div class="actions span-all">
+              <button class="primary" type="submit">Accept invitation</button>
+            </div>
+          </form>
+          <p id="inviteError" class="error" role="alert"></p>
+        </section>
+      </div>
+    </div>
   `;
   document.querySelector('#acceptInviteForm').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -167,33 +203,36 @@ async function loadData() {
 }
 
 function renderApp() {
+  setAuthMode(false);
   const org = state.me.organization?.name || '';
   const user = state.me.user?.email || '';
-  sessionLabel.textContent = `${org} · ${user} · ${state.me.role}`;
+  sessionLabel.innerHTML = `<strong>${escapeHtml(org)}</strong><br>${escapeHtml(user)} · ${escapeHtml(state.me.role)}`;
   app.innerHTML = `
-    <div class="actions" style="justify-content:space-between;margin-bottom:1rem">
-      <div class="tabs">
-        <button type="button" data-tab="people" class="${state.tab === 'people' ? 'active' : ''}">People</button>
-        <button type="button" data-tab="assets" class="${state.tab === 'assets' ? 'active' : ''}">Devices</button>
-        ${canWrite() ? `<button type="button" data-tab="import" class="${state.tab === 'import' ? 'active' : ''}">Import</button>` : ''}
-        ${state.me.role !== 'readonly' ? `<button type="button" data-tab="members" class="${state.tab === 'members' ? 'active' : ''}">Members</button>` : ''}
-        ${state.me.role === 'admin' || state.me.role === 'it' ? `<button type="button" data-tab="settings" class="${state.tab === 'settings' ? 'active' : ''}">Settings</button>` : ''}
-        <button type="button" data-tab="account" class="${state.tab === 'account' ? 'active' : ''}">Account</button>
+    <div class="app-chrome">
+      <div class="nav-row">
+        <nav class="tabs" aria-label="Sections">
+          <button type="button" data-tab="people" class="${state.tab === 'people' ? 'active' : ''}">People</button>
+          <button type="button" data-tab="assets" class="${state.tab === 'assets' ? 'active' : ''}">Devices</button>
+          ${canWrite() ? `<button type="button" data-tab="import" class="${state.tab === 'import' ? 'active' : ''}">Import</button>` : ''}
+          ${state.me.role !== 'readonly' ? `<button type="button" data-tab="members" class="${state.tab === 'members' ? 'active' : ''}">Members</button>` : ''}
+          ${state.me.role === 'admin' || state.me.role === 'it' ? `<button type="button" data-tab="settings" class="${state.tab === 'settings' ? 'active' : ''}">Settings</button>` : ''}
+          <button type="button" data-tab="account" class="${state.tab === 'account' ? 'active' : ''}">Account</button>
+        </nav>
+        <div class="nav-actions">
+          ${state.me.organizations?.length > 1 ? `
+            <select id="organizationSwitch" aria-label="Organization">
+              ${state.me.organizations.map((item) => `
+                <option value="${item.id}" ${item.id === state.me.organization.id ? 'selected' : ''}>
+                  ${escapeHtml(item.name)}
+                </option>
+              `).join('')}
+            </select>
+          ` : ''}
+          <button type="button" id="logout" class="ghost">Log out</button>
+        </div>
       </div>
-      <div class="actions" style="margin-top:0">
-        ${state.me.organizations?.length > 1 ? `
-          <select id="organizationSwitch" aria-label="Organization">
-            ${state.me.organizations.map((item) => `
-              <option value="${item.id}" ${item.id === state.me.organization.id ? 'selected' : ''}>
-                ${escapeHtml(item.name)}
-              </option>
-            `).join('')}
-          </select>
-        ` : ''}
-        <button type="button" id="logout">Log out</button>
-      </div>
+      <div id="tabContent" class="section-stack"></div>
     </div>
-    <div id="tabContent"></div>
   `;
   document.querySelectorAll('[data-tab]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -224,24 +263,37 @@ function renderApp() {
 function renderPeople() {
   document.querySelector('#tabContent').innerHTML = `
     ${canWrite() ? `<section class="panel">
-      <h2>People</h2>
+      <div class="page-head">
+        <div>
+          <h2>People</h2>
+          <p class="lede">Add people who can receive devices.</p>
+        </div>
+        <p class="stat"><strong>${state.people.length}</strong> in directory</p>
+      </div>
       <form id="personForm" class="grid">
         <label>First name <input name="firstName" required></label>
         <label>Last name <input name="lastName" required></label>
         <label>Email <input name="email" type="email"></label>
         <label>Department <input name="department"></label>
-        <div class="actions" style="grid-column:1/-1"><button class="primary">Add person</button></div>
+        <div class="actions span-all"><button class="primary" type="submit">Add person</button></div>
       </form>
     </section>` : ''}
     <section class="panel">
-      <table>
-        <thead><tr><th>Name</th><th>Email</th><th>Department</th><th>Status</th><th></th></tr></thead>
-        <tbody>
-          ${state.people.map((person) => (
-            person.id === state.editingPerson ? personEditRow(person) : personRow(person)
-          )).join('') || '<tr><td colspan="5" class="muted">No people yet.</td></tr>'}
-        </tbody>
-      </table>
+      ${!canWrite() ? `
+        <div class="page-head">
+          <h2>People</h2>
+          <p class="stat"><strong>${state.people.length}</strong> in directory</p>
+        </div>` : ''}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Email</th><th>Department</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            ${state.people.map((person) => (
+              person.id === state.editingPerson ? personEditRow(person) : personRow(person)
+            )).join('') || '<tr><td colspan="5" class="empty">No people yet.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
     </section>
   `;
   document.querySelector('#personForm')?.addEventListener('submit', async (event) => {
@@ -284,10 +336,10 @@ function personRow(person) {
       <td>${escapeHtml(person.firstName)} ${escapeHtml(person.lastName)}</td>
       <td>${escapeHtml(person.email || '')}</td>
       <td>${escapeHtml(person.department || '')}</td>
-      <td>${escapeHtml(person.status)}</td>
-      <td>${canWrite() ? `
-        <button data-edit-person="${person.id}">Edit</button>
-        <button data-del-person="${person.id}">Delete</button>
+      <td><span class="badge ${escapeHtml(person.status)}">${escapeHtml(person.status)}</span></td>
+      <td class="row-actions">${canWrite() ? `
+        <button type="button" data-edit-person="${person.id}">Edit</button>
+        <button type="button" class="danger" data-del-person="${person.id}">Delete</button>
       ` : ''}</td>
     </tr>
   `;
@@ -309,8 +361,8 @@ function personEditRow(person) {
               ).join('')}
             </select>
           </label>
-          <div class="actions" style="grid-column:1/-1">
-            <button class="primary">Save</button>
+          <div class="actions span-all">
+            <button class="primary" type="submit">Save</button>
             <button type="button" id="personEditCancel">Cancel</button>
           </div>
         </form>
@@ -325,7 +377,13 @@ function renderAssets() {
   ).join('');
   document.querySelector('#tabContent').innerHTML = `
     ${canWrite() ? `<section class="panel">
-      <h2>Devices</h2>
+      <div class="page-head">
+        <div>
+          <h2>Devices</h2>
+          <p class="lede">Register hardware and assign it to people.</p>
+        </div>
+        <p class="stat"><strong>${state.assets.length}</strong> devices</p>
+      </div>
       <form id="assetForm" class="grid">
         <label>Asset tag <input name="assetTag" required></label>
         <label>Serial <input name="serialNumber" required></label>
@@ -336,18 +394,25 @@ function renderAssets() {
             ${peopleOptions}
           </select>
         </label>
-        <div class="actions" style="grid-column:1/-1"><button class="primary">Add device</button></div>
+        <div class="actions span-all"><button class="primary" type="submit">Add device</button></div>
       </form>
     </section>` : ''}
     <section class="panel">
-      <table>
-        <thead><tr><th>Tag</th><th>Serial</th><th>Model</th><th>Assigned to</th><th>Status</th><th></th></tr></thead>
-        <tbody>
-          ${state.assets.map((asset) => (
-            asset.id === state.editingAsset ? assetEditRow(asset) : assetRow(asset)
-          )).join('') || '<tr><td colspan="6" class="muted">No devices yet.</td></tr>'}
-        </tbody>
-      </table>
+      ${!canWrite() ? `
+        <div class="page-head">
+          <h2>Devices</h2>
+          <p class="stat"><strong>${state.assets.length}</strong> devices</p>
+        </div>` : ''}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Tag</th><th>Serial</th><th>Model</th><th>Assigned to</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            ${state.assets.map((asset) => (
+              asset.id === state.editingAsset ? assetEditRow(asset) : assetRow(asset)
+            )).join('') || '<tr><td colspan="6" class="empty">No devices yet.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
     </section>
   `;
   document.querySelector('#assetForm')?.addEventListener('submit', async (event) => {
@@ -358,8 +423,6 @@ function renderAssets() {
     await loadData();
     renderApp();
   });
-  // Reassigning and handing a device back are the everyday operations, so they
-  // happen straight from the row rather than through an edit form.
   document.querySelectorAll('[data-assign-asset]').forEach((select) => {
     select.addEventListener('change', async () => {
       await api(`/api/assets/${select.dataset.assignAsset}`, {
@@ -414,10 +477,10 @@ function assetRow(asset) {
           `).join('')}
         </select>
       ` : escapeHtml(personName || '—')}</td>
-      <td>${escapeHtml(asset.status)}</td>
-      <td>${canWrite() ? `
-        <button data-edit-asset="${asset.id}">Edit</button>
-        <button data-del-asset="${asset.id}">Delete</button>
+      <td><span class="badge ${escapeHtml(asset.status)}">${escapeHtml(asset.status)}</span></td>
+      <td class="row-actions">${canWrite() ? `
+        <button type="button" data-edit-asset="${asset.id}">Edit</button>
+        <button type="button" class="danger" data-del-asset="${asset.id}">Delete</button>
       ` : ''}</td>
     </tr>
   `;
@@ -439,8 +502,8 @@ function assetEditRow(asset) {
               ).join('')}
             </select>
           </label>
-          <div class="actions" style="grid-column:1/-1">
-            <button class="primary">Save</button>
+          <div class="actions span-all">
+            <button class="primary" type="submit">Save</button>
             <button type="button" id="assetEditCancel">Cancel</button>
           </div>
         </form>
@@ -454,7 +517,7 @@ function renderImport() {
   document.querySelector('#tabContent').innerHTML = `
     <section class="panel">
       <h2>Import Intune / Jamf CSV</h2>
-      <p class="muted">Preview is stored only inside ${escapeHtml(state.me.organization.name)}.</p>
+      <p class="lede">Preview stays inside ${escapeHtml(state.me.organization.name)} until you apply it.</p>
       <form id="importForm" class="grid">
         <label>Source
           <select name="source">
@@ -464,41 +527,43 @@ function renderImport() {
           </select>
         </label>
         <label>CSV file <input name="file" type="file" accept=".csv,text/csv" required></label>
-        <div class="actions" style="grid-column:1/-1">
-          <button class="primary">Preview import</button>
+        <div class="actions span-all">
+          <button class="primary" type="submit">Preview import</button>
         </div>
       </form>
     </section>
     ${preview ? `
       <section class="panel">
         <h2>Preview ${escapeHtml(preview.source.toUpperCase())}</h2>
-        <p class="muted">
+        <p class="lede">
           ${preview.summary.create} create · ${preview.summary.update} update ·
           ${preview.summary.skip} skip · ${preview.summary.warnings} with warnings
         </p>
         <div class="actions">
-          <button id="applyImport" class="primary">Apply selected rows</button>
+          <button id="applyImport" class="primary" type="button">Apply selected rows</button>
           <button id="selectImportAll" type="button">Select all valid</button>
         </div>
-        <table>
-          <thead>
-            <tr><th></th><th>Line</th><th>Action</th><th>Serial</th><th>Asset</th><th>Model</th><th>Person</th><th>Warnings</th></tr>
-          </thead>
-          <tbody>
-            ${preview.rows.map((row) => `
-              <tr>
-                <td><input type="checkbox" data-import-row="${row.id}" ${row.action !== 'skip' ? 'checked' : 'disabled'}></td>
-                <td>${escapeHtml(row.line)}</td>
-                <td>${escapeHtml(row.action)}</td>
-                <td>${escapeHtml(row.serialNumber || '—')}</td>
-                <td>${escapeHtml(row.assetTag || '—')}</td>
-                <td>${escapeHtml(row.modelName || '—')}</td>
-                <td>${escapeHtml(row.person?.email || '—')}</td>
-                <td>${escapeHtml((row.warnings || []).join('; '))}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th></th><th>Line</th><th>Action</th><th>Serial</th><th>Asset</th><th>Model</th><th>Person</th><th>Warnings</th></tr>
+            </thead>
+            <tbody>
+              ${preview.rows.map((row) => `
+                <tr>
+                  <td><input type="checkbox" data-import-row="${row.id}" ${row.action !== 'skip' ? 'checked' : 'disabled'}></td>
+                  <td>${escapeHtml(row.line)}</td>
+                  <td>${escapeHtml(row.action)}</td>
+                  <td>${escapeHtml(row.serialNumber || '—')}</td>
+                  <td>${escapeHtml(row.assetTag || '—')}</td>
+                  <td>${escapeHtml(row.modelName || '—')}</td>
+                  <td>${escapeHtml(row.person?.email || '—')}</td>
+                  <td>${escapeHtml((row.warnings || []).join('; '))}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
       </section>
     ` : ''}
   `;
@@ -542,6 +607,7 @@ async function renderMembers() {
     ${state.me.role === 'admin' ? `
       <section class="panel">
         <h2>Invite member</h2>
+        <p class="lede">Share a link that expires in seven days.</p>
         <form id="inviteForm" class="grid">
           <label>Email <input name="email" type="email" required></label>
           <label>Role
@@ -551,54 +617,58 @@ async function renderMembers() {
               <option value="admin">Admin</option>
             </select>
           </label>
-          <div class="actions" style="grid-column:1/-1"><button class="primary">Create invitation</button></div>
+          <div class="actions span-all"><button class="primary" type="submit">Create invitation</button></div>
         </form>
-        <div id="inviteResult"></div>
+        <div id="inviteResult" class="invite-link"></div>
       </section>
     ` : ''}
     <section class="panel">
       <h2>Members</h2>
-      <table>
-        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr></thead>
-        <tbody>
-          ${members.map((member) => `
-            <tr>
-              <td>${escapeHtml(member.name)}</td>
-              <td>${escapeHtml(member.email)}</td>
-              <td>
-                ${state.me.role === 'admin' ? `
-                  <select data-member-role="${member.id}">
-                    ${['admin', 'it', 'readonly'].map((role) =>
-                      `<option value="${role}" ${role === member.role ? 'selected' : ''}>${role}</option>`
-                    ).join('')}
-                  </select>
-                ` : escapeHtml(member.role)}
-              </td>
-              <td>
-                ${state.me.role === 'admin' && member.id !== state.me.user.id
-                  ? `<button data-remove-member="${member.id}">Remove</button>`
-                  : ''}
-              </td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr></thead>
+          <tbody>
+            ${members.map((member) => `
+              <tr>
+                <td>${escapeHtml(member.name)}</td>
+                <td>${escapeHtml(member.email)}</td>
+                <td>
+                  ${state.me.role === 'admin' ? `
+                    <select data-member-role="${member.id}">
+                      ${['admin', 'it', 'readonly'].map((role) =>
+                        `<option value="${role}" ${role === member.role ? 'selected' : ''}>${role}</option>`
+                      ).join('')}
+                    </select>
+                  ` : escapeHtml(member.role)}
+                </td>
+                <td class="row-actions">
+                  ${state.me.role === 'admin' && member.id !== state.me.user.id
+                    ? `<button type="button" class="danger" data-remove-member="${member.id}">Remove</button>`
+                    : ''}
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
     </section>
     <section class="panel">
       <h2>Recent audit</h2>
-      <table>
-        <thead><tr><th>Date</th><th>User</th><th>Action</th><th>Entity</th></tr></thead>
-        <tbody>
-          ${audit.slice(0, 50).map((item) => `
-            <tr>
-              <td>${escapeHtml(item.createdAt)}</td>
-              <td>${escapeHtml(item.userEmail || 'system')}</td>
-              <td>${escapeHtml(item.action)}</td>
-              <td>${escapeHtml(item.entityType)} ${escapeHtml(item.entityId || '')}</td>
-            </tr>
-          `).join('') || '<tr><td colspan="4" class="muted">No audit events.</td></tr>'}
-        </tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>User</th><th>Action</th><th>Entity</th></tr></thead>
+          <tbody>
+            ${audit.slice(0, 50).map((item) => `
+              <tr>
+                <td>${escapeHtml(item.createdAt)}</td>
+                <td>${escapeHtml(item.userEmail || 'system')}</td>
+                <td>${escapeHtml(item.action)}</td>
+                <td>${escapeHtml(item.entityType)} ${escapeHtml(item.entityId || '')}</td>
+              </tr>
+            `).join('') || '<tr><td colspan="4" class="empty">No audit events.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
     </section>
   `;
 
@@ -610,8 +680,8 @@ async function renderMembers() {
       body: JSON.stringify(body)
     });
     document.querySelector('#inviteResult').innerHTML = `
-      <p><strong>Invitation link (valid 7 days):</strong></p>
-      <input value="${escapeHtml(invitation.inviteUrl)}" readonly style="width:100%">
+      <p class="lede" style="margin-top:1rem"><strong>Invitation link (valid 7 days)</strong></p>
+      <input value="${escapeHtml(invitation.inviteUrl)}" readonly>
     `;
   });
   document.querySelectorAll('[data-member-role]').forEach((select) => {
@@ -639,15 +709,15 @@ async function renderSettings() {
   target.innerHTML = `
     <section class="panel">
       <h2>Import exclusions</h2>
-      <p class="muted">
+      <p class="lede">
         People matching these addresses are never created from an Intune or Jamf
         import. Each organization has its own list.
       </p>
       <form id="settingsForm" class="grid">
-        <label style="grid-column:1/-1">Excluded emails
+        <label class="span-all">Excluded emails
           <textarea name="excludedEmails" rows="6" ${canEdit ? '' : 'readonly'}>${escapeHtml((settings.excludedEmails || []).join('\n'))}</textarea>
         </label>
-        ${canEdit ? `<div class="actions" style="grid-column:1/-1"><button class="primary">Save settings</button></div>` : ''}
+        ${canEdit ? `<div class="actions span-all"><button class="primary" type="submit">Save settings</button></div>` : ''}
       </form>
       <p id="settingsResult" class="muted"></p>
     </section>
@@ -659,8 +729,10 @@ async function renderSettings() {
     try {
       await api('/api/settings', { method: 'PUT', body: JSON.stringify({ excludedEmails }) });
       document.querySelector('#settingsResult').textContent = 'Saved.';
+      document.querySelector('#settingsResult').className = 'ok-text';
     } catch (error) {
       document.querySelector('#settingsResult').textContent = error.message;
+      document.querySelector('#settingsResult').className = 'error';
     }
   });
 }
@@ -670,25 +742,25 @@ function renderAccount() {
   document.querySelector('#tabContent').innerHTML = `
     <section class="panel">
       <h2>Change password</h2>
-      <p class="muted">Changing it signs out every other device immediately.</p>
+      <p class="lede">Changing it signs out every other device immediately.</p>
       <form id="passwordForm" class="grid">
-        <label>Current password <input name="currentPassword" type="password" required></label>
-        <label>New password <input name="newPassword" type="password" minlength="8" required></label>
-        <div class="actions" style="grid-column:1/-1"><button class="primary">Change password</button></div>
+        <label>Current password <input name="currentPassword" type="password" required autocomplete="current-password"></label>
+        <label>New password <input name="newPassword" type="password" minlength="8" required autocomplete="new-password"></label>
+        <div class="actions span-all"><button class="primary" type="submit">Change password</button></div>
       </form>
       <p id="passwordResult" class="muted"></p>
     </section>
     ${state.me.role === 'admin' ? `
       <section class="panel">
         <h2>Delete organization</h2>
-        <p class="muted">
+        <p class="lede">
           Permanently removes ${escapeHtml(organizationName)} with its people, devices,
           imports and audit log. Members who belong to no other organization are deleted
           with it. Type the name to confirm.
         </p>
         <form id="deleteOrgForm" class="grid">
           <label>Organization name <input name="confirm" required></label>
-          <div class="actions" style="grid-column:1/-1"><button>Delete organization</button></div>
+          <div class="actions span-all"><button type="submit" class="danger">Delete organization</button></div>
         </form>
         <p id="deleteOrgResult" class="muted"></p>
       </section>
@@ -702,13 +774,14 @@ function renderAccount() {
     try {
       const body = Object.fromEntries(new FormData(form).entries());
       const changed = await api('/api/me/password', { method: 'PUT', body: JSON.stringify(body) });
-      // The request invalidated its own token, so adopt the replacement.
       state.token = changed.token;
       localStorage.setItem('saas.token', changed.token);
       form.reset();
       result.textContent = 'Password changed. Other sessions were signed out.';
+      result.className = 'ok-text';
     } catch (error) {
       result.textContent = error.message;
+      result.className = 'error';
     }
   });
 
@@ -723,6 +796,7 @@ function renderAccount() {
       renderAuth();
     } catch (error) {
       result.textContent = error.message;
+      result.className = 'error';
     }
   });
 }
