@@ -44,8 +44,9 @@ credentials, the verification matrix and the teardown limits.
 5. Import one recent Intune CSV and one Jamf CSV.
 6. Compare counts and five random serial numbers with the source exports.
 7. Confirm the read-only account cannot create, delete or import.
-8. Delete or anonymize pilot data if the client does not continue
-   (`npm run reset:test`, plus the manual SQL it prints).
+8. Delete pilot data if the client does not continue: `npm run reset:test`
+   removes the organization, its inventory, its audit log and every account
+   left without another organization. No database access is needed.
 
 ## Backup and tested restore
 

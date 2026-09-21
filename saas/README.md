@@ -8,10 +8,13 @@ The offline Windows app stays on branch `local` (same repo).
 - Register → creates an **organization** + admin user
 - Login → JWT session and organization switcher
 - Roles: admin, IT and read-only
-- Invitations with a 7-day acceptance link
-- People + devices scoped by `organizationId`
+- Invitations with a 7-day acceptance link, member role changes and removal
+- People + devices scoped by `organizationId`, with edit, assign, reassign and
+  return-to-stock
 - Intune/Jamf CSV preview + transactional apply per organization
-- Audit log for mutations and imports
+- Audit log for mutations, assignments and imports
+- Self-service password change that ends every other session
+- Organization deletion that removes its data and orphaned accounts
 - SQLite locally; PostgreSQL on staging/production
 - Health and database readiness checks
 
@@ -40,11 +43,33 @@ to use PostgreSQL instead.
 |----------|---------|---------|
 | `PORT` | `8090` | HTTP port (8080 stays for local app) |
 | `SAAS_DB_PATH` | `saas/data/saas.sqlite` | SQLite path |
-| `SAAS_JWT_SECRET` | dev secret | Sign tokens (set in production) |
+| `SAAS_JWT_SECRET` | none | Sign tokens; the server refuses to start without it |
+| `SAAS_ALLOW_REGISTRATION` | unset | Only `true` opens registration |
+| `SAAS_REGISTRATION_TOKEN` | empty | When set, registration also requires this token |
+| `SAAS_PUBLIC_URL` | empty | Base URL for invitation links; falls back to the Host header |
+| `SAAS_TRUSTED_PROXIES` | `0` | Reverse proxies in front of the app; Render needs `1` |
+| `SAAS_MAX_UPLOAD_MB` | `10` | Upload size limit |
+| `SAAS_MAX_IMPORT_COLUMNS` | `256` | CSV column cap |
+| `SAAS_MAX_IMPORT_ROWS` | `20000` | CSV data row cap |
 | `DATABASE_URL` | empty | PostgreSQL connection URL |
 | `DATABASE_SSL` | `false` | Enable TLS for an external PostgreSQL endpoint |
 
-`SAAS_JWT_SECRET` is mandatory when `NODE_ENV=production`.
+`SAAS_JWT_SECRET` is mandatory everywhere, not only in production: a shared
+default would let anyone mint a token for any organization.
+
+Registration is closed unless it is opened. With `NODE_ENV=production` and no
+`SAAS_ALLOW_REGISTRATION`, the only way in is `SAAS_REGISTRATION_TOKEN`; with
+neither, the endpoint is off.
+
+## Tests
+
+```bash
+npm test                 # SQLite, plus the tenant isolation gate
+npm run pilot:validate   # the isolation gate on its own
+npm run test:postgres    # needs TEST_DATABASE_URL and DATABASE_URL
+```
+
+CI runs both on every push and pull request; see `.github/workflows/ci.yml`.
 
 ## EU staging
 

@@ -34,7 +34,7 @@ state; where it disagrees with a finding, the table wins.
 | M1 login timing oracle | Fixed | an unknown address is verified against a decoy hash |
 | M2 internal errors returned | Fixed | only deliberate errors keep their message; the rest are logged |
 | M3 unvalidated `source` | Fixed | `buildSaasImportPreview` rejects anything outside the allowlist |
-| M4 no GDPR erasure | Open | needs delete endpoints; see ROADMAP Phase 3 |
+| M4 no GDPR erasure | Mostly fixed | removing a member or deleting an organization erases the accounts left behind; audit rows keep an anonymised reference |
 | M5 company defaults in shared import | Partly fixed | SaaS starts from empty lists; ROADMAP Phase 2 removes the global |
 | M6 no `.dockerignore`, runs as root | Fixed | root `.dockerignore`; the image drops to the `node` user |
 | M7 invite token in the URL | Open | needs email delivery first; ROADMAP Phase 1 |

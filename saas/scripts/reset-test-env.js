@@ -11,34 +11,36 @@ if (!email || !password) {
 const session = await login();
 console.log(`[reset] Organization ${session.organization.name} (${session.organization.id}) as ${session.role}`);
 
-const assets = await api('GET', '/api/assets', { token: session.token });
-for (const asset of assets) {
-  await api('DELETE', `/api/assets/${asset.id}`, { token: session.token });
+if (session.role !== 'admin') {
+  fail(`${email} is ${session.role} in this organization; deleting it requires admin.`);
 }
-console.log(`[reset] Deleted ${assets.length} assets`);
 
-const people = await api('GET', '/api/people', { token: session.token });
-for (const person of people) {
-  await api('DELETE', `/api/people/${person.id}`, { token: session.token });
+// Keeps the two modes honest: the default destroys the organization outright,
+// and RESET_KEEP_ORGANIZATION=true only empties the inventory.
+if (String(process.env.RESET_KEEP_ORGANIZATION || '') === 'true') {
+  const assets = await api('GET', '/api/assets', { token: session.token });
+  for (const asset of assets) {
+    await api('DELETE', `/api/assets/${asset.id}`, { token: session.token });
+  }
+  console.log(`[reset] Deleted ${assets.length} assets`);
+
+  const people = await api('GET', '/api/people', { token: session.token });
+  for (const person of people) {
+    await api('DELETE', `/api/people/${person.id}`, { token: session.token });
+  }
+  console.log(`[reset] Deleted ${people.length} people`);
+  console.log('[reset] Kept the organization, its members and its audit log.');
+} else {
+  const result = await api('DELETE', '/api/organizations/current', {
+    token: session.token,
+    body: { confirm: session.organization.name }
+  });
+  console.log([
+    `[reset] Deleted organization ${result.name} (${result.id}) with its people,`,
+    '[reset] devices, invitations, import batches and audit log.',
+    `[reset] Removed ${result.deletedUsers} account(s) that belonged to no other organization.`
+  ].join('\n'));
 }
-console.log(`[reset] Deleted ${people.length} people`);
-
-console.log([
-  '',
-  '[reset] Partial teardown only. The current API exposes no delete route for',
-  '[reset] organizations, users, memberships, invitations, import batches/rows or',
-  '[reset] audit logs, so those rows stay behind. To remove an organization',
-  '[reset] completely, run this against the target database:',
-  '',
-  `  DELETE FROM organizations WHERE id = '${session.organization.id}';`,
-  '',
-  '[reset] Every tenant table references organizations(id), so that single',
-  '[reset] statement cascades. Users with no remaining membership can then be',
-  '[reset] removed with:',
-  '',
-  '  DELETE FROM users u WHERE NOT EXISTS (SELECT 1 FROM memberships m WHERE m.user_id = u.id);',
-  ''
-].join('\n'));
 
 async function login() {
   const attempt = await api('POST', '/api/auth/login', {

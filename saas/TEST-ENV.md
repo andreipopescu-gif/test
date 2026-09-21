@@ -67,26 +67,22 @@ SEED_REGISTRATION_TOKEN=<token from the host environment> \
 cd saas
 TARGET_URL=https://it-inventory-saas-staging.onrender.com \
   RESET_EMAIL=admin-a-<suffix>@pilot.test \
-  RESET_PASSWORD=Pilot-<suffix>-admin-a \
+  RESET_PASSWORD=<password printed by the seed run> \
   npm run reset:test
 ```
 
-Add `RESET_ORG_ID` when the account belongs to more than one organization.
+Add `RESET_ORG_ID` when the account belongs to more than one organization. The
+account must be an admin of the organization being removed.
 
-Teardown is deliberately partial. The API exposes `DELETE /api/people/:id` and
-`DELETE /api/assets/:id` and nothing else, so the script empties both tables and
-stops there. Organizations, users, memberships, invitations, import batches,
-import rows and audit logs have no delete route and stay behind; the script
-prints the SQL for the manual step:
+Teardown is complete and needs no database access. `DELETE
+/api/organizations/current` cascades through people, devices, invitations,
+import batches, import rows and the audit log, and every member left without
+another organization is deleted with it. Run it once per seeded organization —
+`-a` and `-b` are separate.
 
-```sql
-DELETE FROM organizations WHERE id = '<organization id>';
-DELETE FROM users u WHERE NOT EXISTS (SELECT 1 FROM memberships m WHERE m.user_id = u.id);
-```
-
-Every tenant table references `organizations(id)` with `ON DELETE CASCADE`, so
-the first statement removes the rest. Run it from the Render dashboard shell of
-`it-inventory-saas-staging-db`.
+To keep the organization and its members while emptying the inventory, set
+`RESET_KEEP_ORGANIZATION=true`. That is the right mode between two import
+tests on the same pilot tenant.
 
 ## Staging
 
