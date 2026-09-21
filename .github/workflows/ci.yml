@@ -14,8 +14,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      # Scoped to the root suite: a bare `node --test` also picks up saas/test,
+      # which needs its own dependencies installed first.
       - name: Shared import and local app tests
-        run: node --test
+        run: node --test "test/*.test.js"
       - name: Install SaaS dependencies
         run: npm ci
         working-directory: saas

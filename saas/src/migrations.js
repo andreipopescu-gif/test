@@ -142,6 +142,12 @@ export const sqliteMigrations = [
       CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower_unique
       ON users(LOWER(email));
     `
+  },
+  {
+    version: 3,
+    sql: `
+      ALTER TABLE users ADD COLUMN token_epoch INTEGER NOT NULL DEFAULT 0;
+    `
   }
 ];
 
@@ -175,6 +181,15 @@ export const postgresMigrations = [
     sql: `
       CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower_unique
       ON users(LOWER(email));
+    `
+  },
+  {
+    // Tokens are stateless, so a password change would otherwise leave a stolen
+    // session valid until it expired. The epoch travels in the token and is
+    // compared on every request; bumping it ends every existing session.
+    version: 3,
+    sql: `
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS token_epoch INTEGER NOT NULL DEFAULT 0;
     `
   }
 ];

@@ -9,7 +9,9 @@ const state = {
   assets: [],
   importPreview: null,
   members: [],
-  audit: []
+  audit: [],
+  editingPerson: '',
+  editingAsset: ''
 };
 
 boot();
@@ -175,6 +177,7 @@ function renderApp() {
         <button type="button" data-tab="assets" class="${state.tab === 'assets' ? 'active' : ''}">Devices</button>
         ${canWrite() ? `<button type="button" data-tab="import" class="${state.tab === 'import' ? 'active' : ''}">Import</button>` : ''}
         ${state.me.role !== 'readonly' ? `<button type="button" data-tab="members" class="${state.tab === 'members' ? 'active' : ''}">Members</button>` : ''}
+        <button type="button" data-tab="account" class="${state.tab === 'account' ? 'active' : ''}">Account</button>
       </div>
       <div class="actions" style="margin-top:0">
         ${state.me.organizations?.length > 1 ? `
@@ -212,6 +215,7 @@ function renderApp() {
   if (state.tab === 'people') renderPeople();
   else if (state.tab === 'assets') renderAssets();
   else if (state.tab === 'import') renderImport();
+  else if (state.tab === 'account') renderAccount();
   else renderMembers();
 }
 
@@ -229,16 +233,11 @@ function renderPeople() {
     </section>` : ''}
     <section class="panel">
       <table>
-        <thead><tr><th>Name</th><th>Email</th><th>Department</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Email</th><th>Department</th><th>Status</th><th></th></tr></thead>
         <tbody>
-          ${state.people.map((person) => `
-            <tr>
-              <td>${escapeHtml(person.firstName)} ${escapeHtml(person.lastName)}</td>
-              <td>${escapeHtml(person.email || '')}</td>
-              <td>${escapeHtml(person.department || '')}</td>
-              <td>${canWrite() ? `<button data-del-person="${person.id}">Delete</button>` : ''}</td>
-            </tr>
-          `).join('') || '<tr><td colspan="4" class="muted">No people yet.</td></tr>'}
+          ${state.people.map((person) => (
+            person.id === state.editingPerson ? personEditRow(person) : personRow(person)
+          )).join('') || '<tr><td colspan="5" class="muted">No people yet.</td></tr>'}
         </tbody>
       </table>
     </section>
@@ -250,6 +249,24 @@ function renderPeople() {
     await loadData();
     renderApp();
   });
+  document.querySelectorAll('[data-edit-person]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.editingPerson = button.dataset.editPerson;
+      renderApp();
+    });
+  });
+  document.querySelector('#personEditForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const body = Object.fromEntries(new FormData(event.currentTarget).entries());
+    await api(`/api/people/${state.editingPerson}`, { method: 'PUT', body: JSON.stringify(body) });
+    state.editingPerson = '';
+    await loadData();
+    renderApp();
+  });
+  document.querySelector('#personEditCancel')?.addEventListener('click', () => {
+    state.editingPerson = '';
+    renderApp();
+  });
   document.querySelectorAll('[data-del-person]').forEach((button) => {
     button.addEventListener('click', async () => {
       await api(`/api/people/${button.dataset.delPerson}`, { method: 'DELETE' });
@@ -257,6 +274,47 @@ function renderPeople() {
       renderApp();
     });
   });
+}
+
+function personRow(person) {
+  return `
+    <tr>
+      <td>${escapeHtml(person.firstName)} ${escapeHtml(person.lastName)}</td>
+      <td>${escapeHtml(person.email || '')}</td>
+      <td>${escapeHtml(person.department || '')}</td>
+      <td>${escapeHtml(person.status)}</td>
+      <td>${canWrite() ? `
+        <button data-edit-person="${person.id}">Edit</button>
+        <button data-del-person="${person.id}">Delete</button>
+      ` : ''}</td>
+    </tr>
+  `;
+}
+
+function personEditRow(person) {
+  return `
+    <tr>
+      <td colspan="5">
+        <form id="personEditForm" class="grid">
+          <label>First name <input name="firstName" value="${escapeHtml(person.firstName)}" required></label>
+          <label>Last name <input name="lastName" value="${escapeHtml(person.lastName)}" required></label>
+          <label>Email <input name="email" type="email" value="${escapeHtml(person.email || '')}"></label>
+          <label>Department <input name="department" value="${escapeHtml(person.department || '')}"></label>
+          <label>Status
+            <select name="status">
+              ${['active', 'inactive'].map((status) =>
+                `<option value="${status}" ${status === person.status ? 'selected' : ''}>${status}</option>`
+              ).join('')}
+            </select>
+          </label>
+          <div class="actions" style="grid-column:1/-1">
+            <button class="primary">Save</button>
+            <button type="button" id="personEditCancel">Cancel</button>
+          </div>
+        </form>
+      </td>
+    </tr>
+  `;
 }
 
 function renderAssets() {
@@ -281,17 +339,11 @@ function renderAssets() {
     </section>` : ''}
     <section class="panel">
       <table>
-        <thead><tr><th>Tag</th><th>Serial</th><th>Model</th><th>Person</th><th></th></tr></thead>
+        <thead><tr><th>Tag</th><th>Serial</th><th>Model</th><th>Assigned to</th><th>Status</th><th></th></tr></thead>
         <tbody>
-          ${state.assets.map((asset) => `
-            <tr>
-              <td>${escapeHtml(asset.assetTag)}</td>
-              <td>${escapeHtml(asset.serialNumber)}</td>
-              <td>${escapeHtml(asset.modelName || '')}</td>
-              <td>${escapeHtml([asset.personFirstName, asset.personLastName].filter(Boolean).join(' ') || '—')}</td>
-              <td>${canWrite() ? `<button data-del-asset="${asset.id}">Delete</button>` : ''}</td>
-            </tr>
-          `).join('') || '<tr><td colspan="5" class="muted">No devices yet.</td></tr>'}
+          ${state.assets.map((asset) => (
+            asset.id === state.editingAsset ? assetEditRow(asset) : assetRow(asset)
+          )).join('') || '<tr><td colspan="6" class="muted">No devices yet.</td></tr>'}
         </tbody>
       </table>
     </section>
@@ -304,6 +356,36 @@ function renderAssets() {
     await loadData();
     renderApp();
   });
+  // Reassigning and handing a device back are the everyday operations, so they
+  // happen straight from the row rather than through an edit form.
+  document.querySelectorAll('[data-assign-asset]').forEach((select) => {
+    select.addEventListener('change', async () => {
+      await api(`/api/assets/${select.dataset.assignAsset}`, {
+        method: 'PUT',
+        body: JSON.stringify({ personId: select.value })
+      });
+      await loadData();
+      renderApp();
+    });
+  });
+  document.querySelectorAll('[data-edit-asset]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.editingAsset = button.dataset.editAsset;
+      renderApp();
+    });
+  });
+  document.querySelector('#assetEditForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const body = Object.fromEntries(new FormData(event.currentTarget).entries());
+    await api(`/api/assets/${state.editingAsset}`, { method: 'PUT', body: JSON.stringify(body) });
+    state.editingAsset = '';
+    await loadData();
+    renderApp();
+  });
+  document.querySelector('#assetEditCancel')?.addEventListener('click', () => {
+    state.editingAsset = '';
+    renderApp();
+  });
   document.querySelectorAll('[data-del-asset]').forEach((button) => {
     button.addEventListener('click', async () => {
       await api(`/api/assets/${button.dataset.delAsset}`, { method: 'DELETE' });
@@ -311,6 +393,58 @@ function renderAssets() {
       renderApp();
     });
   });
+}
+
+function assetRow(asset) {
+  const personName = [asset.personFirstName, asset.personLastName].filter(Boolean).join(' ');
+  return `
+    <tr>
+      <td>${escapeHtml(asset.assetTag)}</td>
+      <td>${escapeHtml(asset.serialNumber)}</td>
+      <td>${escapeHtml(asset.modelName || '')}</td>
+      <td>${canWrite() ? `
+        <select data-assign-asset="${asset.id}">
+          <option value="">— Unassigned —</option>
+          ${state.people.map((person) => `
+            <option value="${person.id}" ${person.id === asset.personId ? 'selected' : ''}>
+              ${escapeHtml(person.firstName)} ${escapeHtml(person.lastName)}
+            </option>
+          `).join('')}
+        </select>
+      ` : escapeHtml(personName || '—')}</td>
+      <td>${escapeHtml(asset.status)}</td>
+      <td>${canWrite() ? `
+        <button data-edit-asset="${asset.id}">Edit</button>
+        <button data-del-asset="${asset.id}">Delete</button>
+      ` : ''}</td>
+    </tr>
+  `;
+}
+
+function assetEditRow(asset) {
+  const statuses = ['in_stock', 'assigned', 'deployed', 'service', 'retired'];
+  return `
+    <tr>
+      <td colspan="6">
+        <form id="assetEditForm" class="grid">
+          <label>Asset tag <input name="assetTag" value="${escapeHtml(asset.assetTag)}" required></label>
+          <label>Serial <input name="serialNumber" value="${escapeHtml(asset.serialNumber)}" required></label>
+          <label>Model <input name="modelName" value="${escapeHtml(asset.modelName || '')}"></label>
+          <label>Status
+            <select name="status">
+              ${statuses.map((status) =>
+                `<option value="${status}" ${status === asset.status ? 'selected' : ''}>${status}</option>`
+              ).join('')}
+            </select>
+          </label>
+          <div class="actions" style="grid-column:1/-1">
+            <button class="primary">Save</button>
+            <button type="button" id="assetEditCancel">Cancel</button>
+          </div>
+        </form>
+      </td>
+    </tr>
+  `;
 }
 
 function renderImport() {
@@ -423,7 +557,7 @@ async function renderMembers() {
     <section class="panel">
       <h2>Members</h2>
       <table>
-        <thead><tr><th>Name</th><th>Email</th><th>Role</th></tr></thead>
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr></thead>
         <tbody>
           ${members.map((member) => `
             <tr>
@@ -437,6 +571,11 @@ async function renderMembers() {
                     ).join('')}
                   </select>
                 ` : escapeHtml(member.role)}
+              </td>
+              <td>
+                ${state.me.role === 'admin' && member.id !== state.me.user.id
+                  ? `<button data-remove-member="${member.id}">Remove</button>`
+                  : ''}
               </td>
             </tr>
           `).join('')}
@@ -481,6 +620,74 @@ async function renderMembers() {
       });
       await renderMembers();
     });
+  });
+  document.querySelectorAll('[data-remove-member]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await api(`/api/members/${button.dataset.removeMember}`, { method: 'DELETE' });
+      await renderMembers();
+    });
+  });
+}
+
+function renderAccount() {
+  const organizationName = state.me.organization?.name || '';
+  document.querySelector('#tabContent').innerHTML = `
+    <section class="panel">
+      <h2>Change password</h2>
+      <p class="muted">Changing it signs out every other device immediately.</p>
+      <form id="passwordForm" class="grid">
+        <label>Current password <input name="currentPassword" type="password" required></label>
+        <label>New password <input name="newPassword" type="password" minlength="8" required></label>
+        <div class="actions" style="grid-column:1/-1"><button class="primary">Change password</button></div>
+      </form>
+      <p id="passwordResult" class="muted"></p>
+    </section>
+    ${state.me.role === 'admin' ? `
+      <section class="panel">
+        <h2>Delete organization</h2>
+        <p class="muted">
+          Permanently removes ${escapeHtml(organizationName)} with its people, devices,
+          imports and audit log. Members who belong to no other organization are deleted
+          with it. Type the name to confirm.
+        </p>
+        <form id="deleteOrgForm" class="grid">
+          <label>Organization name <input name="confirm" required></label>
+          <div class="actions" style="grid-column:1/-1"><button>Delete organization</button></div>
+        </form>
+        <p id="deleteOrgResult" class="muted"></p>
+      </section>
+    ` : ''}
+  `;
+
+  document.querySelector('#passwordForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const result = document.querySelector('#passwordResult');
+    try {
+      const body = Object.fromEntries(new FormData(form).entries());
+      const changed = await api('/api/me/password', { method: 'PUT', body: JSON.stringify(body) });
+      // The request invalidated its own token, so adopt the replacement.
+      state.token = changed.token;
+      localStorage.setItem('saas.token', changed.token);
+      form.reset();
+      result.textContent = 'Password changed. Other sessions were signed out.';
+    } catch (error) {
+      result.textContent = error.message;
+    }
+  });
+
+  document.querySelector('#deleteOrgForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const result = document.querySelector('#deleteOrgResult');
+    try {
+      const body = Object.fromEntries(new FormData(event.currentTarget).entries());
+      await api('/api/organizations/current', { method: 'DELETE', body: JSON.stringify(body) });
+      state.token = '';
+      localStorage.removeItem('saas.token');
+      renderAuth();
+    } catch (error) {
+      result.textContent = error.message;
+    }
   });
 }
 

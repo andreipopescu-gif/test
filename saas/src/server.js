@@ -150,6 +150,20 @@ async function handleApi(req, res, url) {
     return sendJson(res, await updateMemberRole(session, userId, await readJson(req)));
   }
 
+  if (method === 'DELETE' && path.startsWith('/api/members/')) {
+    requireRole(session, ['admin']);
+    return sendJson(res, await removeMember(session, path.split('/')[3]));
+  }
+
+  if (method === 'PUT' && path === '/api/me/password') {
+    return sendJson(res, await changePassword(session, await readJson(req)));
+  }
+
+  if (method === 'DELETE' && path === '/api/organizations/current') {
+    requireRole(session, ['admin']);
+    return sendJson(res, await deleteCurrentOrganization(session, await readJson(req)));
+  }
+
   if (path === '/api/audit' && method === 'GET') {
     requireRole(session, ['admin', 'it']);
     return sendJson(res, await listAuditLogs(session.organizationId));
@@ -181,6 +195,14 @@ async function handleApi(req, res, url) {
     }
   }
 
+  if (method === 'PUT' && path.startsWith('/api/people/')) {
+    requireRole(session, ['admin', 'it']);
+    const id = path.split('/')[3];
+    const person = await updatePerson(session.organizationId, id, await readJson(req));
+    await addAudit(session, 'person.update', 'person', id);
+    return sendJson(res, person);
+  }
+
   if (method === 'DELETE' && path.startsWith('/api/people/')) {
     requireRole(session, ['admin', 'it']);
     const id = path.split('/')[3];
@@ -197,6 +219,24 @@ async function handleApi(req, res, url) {
       await addAudit(session, 'asset.create', 'asset', asset.id);
       return sendJson(res, asset, 201);
     }
+  }
+
+  if (method === 'PUT' && path.startsWith('/api/assets/')) {
+    requireRole(session, ['admin', 'it']);
+    const id = path.split('/')[3];
+    const { asset, assignmentChange } = await updateAsset(
+      session.organizationId,
+      id,
+      await readJson(req)
+    );
+    await addAudit(
+      session,
+      assignmentChange ? 'asset.assign' : 'asset.update',
+      'asset',
+      id,
+      assignmentChange || {}
+    );
+    return sendJson(res, asset);
   }
 
   if (method === 'DELETE' && path.startsWith('/api/assets/')) {
@@ -216,9 +256,16 @@ async function requireSession(req) {
   const payload = verifyToken(token);
   if (!payload?.sub || !payload?.org) throw unauthorized();
   const membership = await db.get(`
-    SELECT role FROM memberships WHERE user_id = ? AND organization_id = ?
+    SELECT m.role, u.token_epoch AS "tokenEpoch"
+    FROM memberships m
+    JOIN users u ON u.id = m.user_id
+    WHERE m.user_id = ? AND m.organization_id = ?
   `, [payload.sub, payload.org]);
   if (!membership) throw unauthorized();
+  // Tokens issued before the current epoch belong to a session that was ended
+  // by a password change. Tokens minted before this claim existed read as 0,
+  // which is also the default epoch, so they keep working.
+  if (Number(payload.epoch || 0) !== Number(membership.tokenEpoch || 0)) throw unauthorized();
   return {
     userId: payload.sub,
     organizationId: payload.org,
@@ -285,7 +332,7 @@ async function register(input) {
     throw error;
   });
 
-  const token = signToken({ sub: userId, org: orgId, role: 'admin', email });
+  const token = signToken({ sub: userId, org: orgId, role: 'admin', email, epoch: 0 });
   return {
     token,
     user: { id: userId, email, name },
@@ -323,7 +370,8 @@ async function login(input) {
     sub: user.id,
     org: membership.id,
     role: membership.role,
-    email: user.email
+    email: user.email,
+    epoch: Number(user.token_epoch || 0)
   });
   return {
     token,
@@ -364,15 +412,19 @@ async function switchOrganization(session, input) {
     WHERE m.user_id = ? AND m.organization_id = ?
   `, [session.userId, organizationId]);
   if (!membership) throw unauthorized('User does not belong to that organization');
-  const user = await db.get('SELECT id, email, name FROM users WHERE id = ?', [session.userId]);
+  const user = await db.get(
+    'SELECT id, email, name, token_epoch AS "tokenEpoch" FROM users WHERE id = ?',
+    [session.userId]
+  );
   return {
     token: signToken({
       sub: user.id,
       org: membership.id,
       role: membership.role,
-      email: user.email
+      email: user.email,
+      epoch: Number(user.tokenEpoch || 0)
     }),
-    user,
+    user: { id: user.id, email: user.email, name: user.name },
     organization: { id: membership.id, name: membership.name },
     role: membership.role
   };
@@ -495,12 +547,16 @@ async function acceptInvitation(input) {
     email: invitation.email,
     role: invitation.role
   });
+  const epoch = Number(
+    (await db.get('SELECT token_epoch AS "tokenEpoch" FROM users WHERE id = ?', [user.id]))?.tokenEpoch || 0
+  );
   return {
     token: signToken({
       sub: user.id,
       org: invitation.organization_id,
       role: invitation.role,
-      email: user.email
+      email: user.email,
+      epoch
     }),
     user: { id: user.id, email: user.email, name: user.name },
     organization: { id: invitation.organization_id, name: invitation.organization_name },
@@ -529,6 +585,104 @@ async function updateMemberRole(session, userId, input) {
     after: role
   });
   return (await listMembers(session.organizationId)).find((member) => member.id === userId);
+}
+
+async function removeMember(session, userId) {
+  const membership = await db.get(`
+    SELECT id, role FROM memberships WHERE organization_id = ? AND user_id = ?
+  `, [session.organizationId, userId]);
+  if (!membership) throw notFound('Member not found');
+  if (membership.role === 'admin' && await isLastAdmin(session.organizationId)) {
+    throw badRequest('Organization must keep at least one admin');
+  }
+
+  const removed = await db.get('SELECT email FROM users WHERE id = ?', [userId]);
+  await db.transaction(async (tx) => {
+    await tx.run('DELETE FROM memberships WHERE id = ?', [membership.id]);
+    await deleteUserWithoutOrganizations(tx, userId);
+  });
+  await addAudit(session, 'member.remove', 'user', userId, {
+    email: removed?.email || '',
+    role: membership.role
+  });
+  return { ok: true, id: userId };
+}
+
+async function isLastAdmin(organizationId) {
+  const row = await db.get(`
+    SELECT COUNT(*) AS count FROM memberships
+    WHERE organization_id = ? AND role = 'admin'
+  `, [organizationId]);
+  return Number(row.count) <= 1;
+}
+
+// An account that belongs to no organization has no way back into the product
+// and nothing left to authorise, so leaving the row behind would only keep a
+// personal e-mail address on file.
+async function deleteUserWithoutOrganizations(tx, userId) {
+  const remaining = await tx.get(
+    'SELECT 1 AS present FROM memberships WHERE user_id = ? LIMIT 1',
+    [userId]
+  );
+  if (remaining) return false;
+  await tx.run('DELETE FROM users WHERE id = ?', [userId]);
+  return true;
+}
+
+async function changePassword(session, input) {
+  const currentPassword = String(input.currentPassword || '');
+  const newPassword = String(input.newPassword || '');
+  if (newPassword.length < 8) throw badRequest('newPassword must have at least 8 characters');
+  const user = await db.get('SELECT * FROM users WHERE id = ?', [session.userId]);
+  if (!user || !verifyPassword(currentPassword, user.password_hash)) {
+    throw unauthorized('Current password is incorrect');
+  }
+  const epoch = Number(user.token_epoch || 0) + 1;
+  await db.run(
+    'UPDATE users SET password_hash = ?, token_epoch = ? WHERE id = ?',
+    [hashPassword(newPassword), epoch, session.userId]
+  );
+  await addAudit(session, 'user.password_change', 'user', session.userId);
+
+  // Every previously issued token, including the one that made this request,
+  // is now rejected, so hand back a fresh one to avoid logging the caller out.
+  return {
+    ok: true,
+    token: signToken({
+      sub: user.id,
+      org: session.organizationId,
+      role: session.role,
+      email: user.email,
+      epoch
+    })
+  };
+}
+
+async function deleteCurrentOrganization(session, input) {
+  const organization = await db.get(
+    'SELECT id, name FROM organizations WHERE id = ?',
+    [session.organizationId]
+  );
+  if (!organization) throw notFound('Organization not found');
+  // Deleting cascades through people, devices, imports and the audit log, so
+  // the caller has to name what is being destroyed.
+  if (clean(input.confirm) !== organization.name) {
+    throw badRequest('confirm must repeat the organization name exactly');
+  }
+
+  const memberIds = (await db.all(
+    'SELECT user_id AS "userId" FROM memberships WHERE organization_id = ?',
+    [organization.id]
+  )).map((row) => row.userId);
+
+  let deletedUsers = 0;
+  await db.transaction(async (tx) => {
+    await tx.run('DELETE FROM organizations WHERE id = ?', [organization.id]);
+    for (const userId of memberIds) {
+      if (await deleteUserWithoutOrganizations(tx, userId)) deletedUsers += 1;
+    }
+  });
+  return { ok: true, id: organization.id, name: organization.name, deletedUsers };
 }
 
 async function listAuditLogs(organizationId) {
@@ -583,6 +737,39 @@ async function createPerson(organizationId, input) {
     input.status === 'inactive' ? 'inactive' : 'active',
     now,
     now
+  ]);
+  return (await listPeople(organizationId)).find((person) => person.id === id);
+}
+
+async function updatePerson(organizationId, id, input) {
+  const existing = await db.get(
+    'SELECT * FROM people WHERE id = ? AND organization_id = ?',
+    [id, organizationId]
+  );
+  if (!existing) throw notFound('Person not found');
+
+  const firstName = pick(input.firstName, existing.first_name);
+  const lastName = pick(input.lastName, existing.last_name);
+  if (!firstName || !lastName) throw badRequest('firstName and lastName are required');
+  const status = input.status === undefined
+    ? existing.status
+    : (input.status === 'inactive' ? 'inactive' : 'active');
+
+  await db.run(`
+    UPDATE people
+    SET first_name = ?, last_name = ?, email = ?, department = ?, role_title = ?,
+        status = ?, updated_at = ?
+    WHERE id = ? AND organization_id = ?
+  `, [
+    firstName,
+    lastName,
+    pick(input.email, existing.email).toLowerCase(),
+    pick(input.department, existing.department),
+    pick(input.role, existing.role_title),
+    status,
+    new Date().toISOString(),
+    id,
+    organizationId
   ]);
   return (await listPeople(organizationId)).find((person) => person.id === id);
 }
@@ -643,6 +830,65 @@ async function createAsset(organizationId, input) {
     throw error;
   }
   return (await listAssets(organizationId)).find((asset) => asset.id === id);
+}
+
+async function updateAsset(organizationId, id, input) {
+  const existing = await db.get(
+    'SELECT * FROM assets WHERE id = ? AND organization_id = ?',
+    [id, organizationId]
+  );
+  if (!existing) throw notFound('Asset not found');
+
+  const assetTag = pick(input.assetTag, existing.asset_tag);
+  const serialNumber = pick(input.serialNumber, existing.serial_number);
+  if (!assetTag || !serialNumber) throw badRequest('assetTag and serialNumber are required');
+
+  let personId = existing.person_id;
+  if (input.personId !== undefined) {
+    personId = clean(input.personId) || null;
+    if (personId) {
+      const person = await db.get(
+        'SELECT id FROM people WHERE id = ? AND organization_id = ?',
+        [personId, organizationId]
+      );
+      if (!person) throw badRequest('Person does not belong to this organization');
+    }
+  }
+
+  // Assigning always marks the device assigned; handing it back returns it to
+  // stock unless the caller asked for another status, such as service.
+  let status;
+  if (personId) status = 'assigned';
+  else if (input.status !== undefined) status = normalizeStatus(input.status);
+  else status = existing.person_id ? 'in_stock' : existing.status;
+
+  try {
+    await db.run(`
+      UPDATE assets
+      SET asset_tag = ?, serial_number = ?, model_name = ?, status = ?, person_id = ?, updated_at = ?
+      WHERE id = ? AND organization_id = ?
+    `, [
+      assetTag,
+      serialNumber,
+      pick(input.modelName, existing.model_name),
+      status,
+      personId,
+      new Date().toISOString(),
+      id,
+      organizationId
+    ]);
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw badRequest('assetTag or serialNumber already exists in this organization');
+    }
+    throw error;
+  }
+
+  const asset = (await listAssets(organizationId)).find((item) => item.id === id);
+  const assignmentChange = (existing.person_id || null) === personId
+    ? null
+    : { from: existing.person_id || null, to: personId, status };
+  return { asset, assignmentChange };
 }
 
 async function deleteAsset(organizationId, id) {
@@ -898,6 +1144,12 @@ function contentType(filePath) {
 
 function clean(value) {
   return String(value ?? '').trim();
+}
+
+// Updates are partial: an omitted field keeps the stored value, while an empty
+// string is a deliberate clear.
+function pick(provided, current) {
+  return provided === undefined ? clean(current) : clean(provided);
 }
 
 function slugify(value) {
