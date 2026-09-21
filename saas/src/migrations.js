@@ -148,6 +148,41 @@ export const sqliteMigrations = [
     sql: `
       ALTER TABLE users ADD COLUMN token_epoch INTEGER NOT NULL DEFAULT 0;
     `
+  },
+  {
+    version: 4,
+    sql: `
+      CREATE TABLE IF NOT EXISTS organization_settings (
+        organization_id TEXT PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+        excluded_emails_json TEXT NOT NULL DEFAULT '[]',
+        excluded_name_rules_json TEXT NOT NULL DEFAULT '[]',
+        identity_groups_json TEXT NOT NULL DEFAULT '[]',
+        model_overrides_json TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL
+      );
+      ALTER TABLE import_batches ADD COLUMN policy_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE assets ADD COLUMN external_ids_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE assets ADD COLUMN import_meta_json TEXT NOT NULL DEFAULT '{}';
+      CREATE TABLE IF NOT EXISTS asset_assignments (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        person_id TEXT REFERENCES people(id) ON DELETE SET NULL,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        end_reason TEXT,
+        source TEXT NOT NULL DEFAULT 'manual'
+      );
+      CREATE INDEX IF NOT EXISTS idx_asset_assignments_asset ON asset_assignments(asset_id, started_at);
+      CREATE INDEX IF NOT EXISTS idx_asset_assignments_org ON asset_assignments(organization_id);
+      CREATE TABLE IF NOT EXISTS rate_limits (
+        bucket TEXT NOT NULL,
+        client_key TEXT NOT NULL,
+        window_start INTEGER NOT NULL,
+        count INTEGER NOT NULL,
+        PRIMARY KEY (bucket, client_key, window_start)
+      );
+    `
   }
 ];
 
@@ -190,6 +225,41 @@ export const postgresMigrations = [
     version: 3,
     sql: `
       ALTER TABLE users ADD COLUMN IF NOT EXISTS token_epoch INTEGER NOT NULL DEFAULT 0;
+    `
+  },
+  {
+    version: 4,
+    sql: `
+      CREATE TABLE IF NOT EXISTS organization_settings (
+        organization_id TEXT PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+        excluded_emails_json TEXT NOT NULL DEFAULT '[]',
+        excluded_name_rules_json TEXT NOT NULL DEFAULT '[]',
+        identity_groups_json TEXT NOT NULL DEFAULT '[]',
+        model_overrides_json TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL
+      );
+      ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS policy_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS external_ids_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS import_meta_json TEXT NOT NULL DEFAULT '{}';
+      CREATE TABLE IF NOT EXISTS asset_assignments (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        person_id TEXT REFERENCES people(id) ON DELETE SET NULL,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        end_reason TEXT,
+        source TEXT NOT NULL DEFAULT 'manual'
+      );
+      CREATE INDEX IF NOT EXISTS idx_asset_assignments_asset ON asset_assignments(asset_id, started_at);
+      CREATE INDEX IF NOT EXISTS idx_asset_assignments_org ON asset_assignments(organization_id);
+      CREATE TABLE IF NOT EXISTS rate_limits (
+        bucket TEXT NOT NULL,
+        client_key TEXT NOT NULL,
+        window_start INTEGER NOT NULL,
+        count INTEGER NOT NULL,
+        PRIMARY KEY (bucket, client_key, window_start)
+      );
     `
   }
 ];

@@ -133,7 +133,7 @@ export function applyPreferredIdentityNames(person) {
   if (!person) return false;
   const names = preferredIdentityNames(person.email) ||
     preferredIdentityNames(person.externalIds?.upn) ||
-    (person.externalIds?.alternateEmails || []).map(preferredIdentityNames).find(Boolean);
+    (person.externalIds?.alternateEmails || []).map((email) => preferredIdentityNames(email)).find(Boolean);
   if (!names) return false;
   let changed = false;
   if (names.firstName && person.firstName !== names.firstName) {

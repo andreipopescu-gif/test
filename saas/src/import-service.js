@@ -2,14 +2,7 @@ import { parseCsv } from '../../src/import/csv-parser.js';
 import { detectSource } from '../../src/import/detect-source.js';
 import { mapIntuneRows } from '../../src/import/intune-mapper.js';
 import { mapJamfRows } from '../../src/import/jamf-mapper.js';
-import { setRuntimeExcludedUsers } from '../../src/import/excluded-users.js';
-import { setRuntimeIdentityGroups } from '../../src/import/known-person-aliases.js';
-
-// The shared import modules ship with defaults for the original single-company
-// deployment. A multi-client host must start from empty lists, otherwise one
-// customer's exclusions and aliases would silently apply to every organization.
-setRuntimeExcludedUsers({ emails: [], nameRules: [], useDefaults: false });
-setRuntimeIdentityGroups([], { useDefaults: false });
+import { emptyImportPolicy } from '../../src/import/import-policy.js';
 
 export const IMPORT_SOURCES = ['auto', 'intune', 'jamf'];
 
@@ -23,7 +16,8 @@ export function buildSaasImportPreview({
   fileName,
   source = 'auto',
   existingAssets = [],
-  existingPeople = []
+  existingPeople = [],
+  policy = emptyImportPolicy()
 }) {
   // `source` arrives as a multipart form field. Unvalidated it reaches
   // detectSource(), which returns it verbatim, and then a column constrained to
@@ -34,8 +28,10 @@ export function buildSaasImportPreview({
   }
   const parsed = parseCsv(buffer, { maxColumns, maxRows });
   const detectedSource = detectSource(parsed.headers, requestedSource);
+  // Policy is per request. The shared modules no longer see a process-global
+  // exclusion list on this path, so two organizations can import at once.
   const normalizedRows = detectedSource === 'intune'
-    ? mapIntuneRows(parsed.records, 'all')
+    ? mapIntuneRows(parsed.records, 'all', policy)
     : mapJamfRows(parsed.records, 'all');
 
   const assetsBySerial = new Map(

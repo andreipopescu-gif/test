@@ -2,12 +2,13 @@ import { normalizeImportDate } from './date-utils.js';
 import { detectMtrRegion, shouldSkipImportedUser } from './excluded-users.js';
 import { parsePersonDisplayName } from '../utils/person-name.js';
 import { fieldIndex, normalizeKey } from './record-lookup.js';
+import { getRuntimeImportPolicy } from './import-policy.js';
 
-export function mapIntuneRows(records, deviceFilter = 'all') {
-  return records.map(mapRow).filter((row) => row && matchesFilter(row, deviceFilter));
+export function mapIntuneRows(records, deviceFilter = 'all', policy = getRuntimeImportPolicy()) {
+  return records.map((record) => mapRow(record, policy)).filter((row) => row && matchesFilter(row, deviceFilter));
 }
 
-function mapRow(record) {
+function mapRow(record, policy) {
   const manufacturer = field(record, ['Manufacturer', 'Device manufacturer', 'Device Manufacturer', 'OEM']);
   let model = field(record, ['Model', 'Device model', 'Device Model', 'Model name', 'Device model name']);
   let os = field(record, [
@@ -79,7 +80,7 @@ function mapRow(record) {
       role: '',
       externalIds: { upn: email, jamfUsername: '' }
     };
-    if (!shouldSkipImportedUser(candidate)) person = candidate;
+    if (!shouldSkipImportedUser(candidate, policy)) person = candidate;
   }
 
   return {

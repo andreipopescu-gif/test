@@ -1,38 +1,34 @@
 /**
  * Users that must never be created/updated from Intune or Entra imports.
- * Runtime lists come from app settings (seeded with defaults).
+ * Prefer an explicit ImportPolicy; the module-level lists are only a shim for
+ * the offline single-tenant app, which still calls setRuntimeExcludedUsers().
  */
 
-import { DEFAULT_EXCLUDED_EMAILS, DEFAULT_EXCLUDED_NAME_RULES } from '../settings/defaults.js';
-
-let runtimeExcludedEmails = [...DEFAULT_EXCLUDED_EMAILS];
-let runtimeExcludedNameRules = DEFAULT_EXCLUDED_NAME_RULES.map((rule) => ({
-  id: rule.id,
-  tokens: [...rule.tokens]
-}));
+import {
+  createImportPolicy,
+  defaultImportPolicy,
+  emptyImportPolicy,
+  getRuntimeImportPolicy,
+  setRuntimeImportPolicy
+} from './import-policy.js';
 
 /**
  * `useDefaults: false` drops the built-in company-specific lists. Multi-tenant
  * hosts must opt out so one customer's exclusions never hide another's people.
+ * Prefer createImportPolicy() + shouldSkipImportedUser(person, policy).
  */
 export function setRuntimeExcludedUsers({ emails, nameRules, useDefaults = true } = {}) {
-  const fallbackEmails = useDefaults ? [...DEFAULT_EXCLUDED_EMAILS] : [];
-  const fallbackNameRules = useDefaults
-    ? DEFAULT_EXCLUDED_NAME_RULES.map((rule) => ({ id: rule.id, tokens: [...rule.tokens] }))
-    : [];
-
-  runtimeExcludedEmails = Array.isArray(emails) && emails.length
-    ? emails.map((value) => String(value ?? '').trim().toLowerCase()).filter(Boolean)
-    : fallbackEmails;
-  runtimeExcludedNameRules = Array.isArray(nameRules) && nameRules.length
-    ? nameRules.map((rule, index) => ({
-        id: rule.id || `rule-${index}`,
-        tokens: (rule.tokens || []).map((token) => String(token ?? '').trim().toLowerCase()).filter(Boolean)
-      })).filter((rule) => rule.tokens.length)
-    : fallbackNameRules;
+  const current = getRuntimeImportPolicy();
+  const base = useDefaults ? defaultImportPolicy() : emptyImportPolicy();
+  setRuntimeImportPolicy(createImportPolicy({
+    excludedEmails: Array.isArray(emails) && emails.length ? emails : base.excludedEmails,
+    excludedNameRules: Array.isArray(nameRules) && nameRules.length ? nameRules : base.excludedNameRules,
+    identityGroups: current.identityGroups,
+    modelOverrides: current.modelOverrides
+  }));
 }
 
-export function shouldSkipImportedUser(person = {}) {
+export function shouldSkipImportedUser(person = {}, policy = getRuntimeImportPolicy()) {
   const haystack = normalizeIdentity([
     person.displayName,
     person.firstName,
@@ -43,12 +39,12 @@ export function shouldSkipImportedUser(person = {}) {
   ].filter(Boolean).join(' '));
   if (!haystack) return false;
 
-  for (const email of runtimeExcludedEmails) {
+  for (const email of policy.excludedEmails) {
     if (email && haystack.includes(email)) return true;
   }
   if (/(^|[\s,;@._-])notificari([\s,;@._-]|$)/.test(haystack)) return true;
 
-  return runtimeExcludedNameRules.some((rule) =>
+  return policy.excludedNameRules.some((rule) =>
     rule.tokens.every((token) => haystack.includes(token))
   );
 }

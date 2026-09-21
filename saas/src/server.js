@@ -15,6 +15,7 @@ import {
   notFound
 } from './http.js';
 import { buildSaasImportPreview } from './import-service.js';
+import { createImportPolicy } from '../../src/import/import-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -93,7 +94,7 @@ async function handleApi(req, res, url) {
   if (method === 'GET' && path === '/api/ready') {
     // Unauthenticated and it touches the database, so an uptime probe is fine
     // but a flood must not become free query load.
-    enforceRateLimit(req, 'ready', 60, 60_000);
+    await enforceRateLimit(req, 'ready', 60, 60_000);
     return sendJson(res, await readiness());
   }
 
@@ -103,7 +104,7 @@ async function handleApi(req, res, url) {
       error.status = 403;
       throw error;
     }
-    enforceRateLimit(req, 'auth', 20, 15 * 60_000);
+    await enforceRateLimit(req, 'auth', 20, 15 * 60_000);
     const input = await readJson(req);
     if (registrationToken && !matchesSecret(input.registrationToken, registrationToken)) {
       const error = new Error('A valid registration token is required.');
@@ -114,12 +115,12 @@ async function handleApi(req, res, url) {
   }
 
   if (method === 'POST' && path === '/api/auth/login') {
-    enforceRateLimit(req, 'auth', 20, 15 * 60_000);
+    await enforceRateLimit(req, 'auth', 20, 15 * 60_000);
     return sendJson(res, await login(await readJson(req)));
   }
 
   if (method === 'POST' && path === '/api/invitations/accept') {
-    enforceRateLimit(req, 'auth', 20, 15 * 60_000);
+    await enforceRateLimit(req, 'auth', 20, 15 * 60_000);
     return sendJson(res, await acceptInvitation(await readJson(req)));
   }
 
@@ -169,9 +170,21 @@ async function handleApi(req, res, url) {
     return sendJson(res, await listAuditLogs(session.organizationId));
   }
 
+  if (path === '/api/settings') {
+    if (method === 'GET') {
+      requireRole(session, ['admin', 'it']);
+      return sendJson(res, await getOrganizationSettings(session.organizationId));
+    }
+    if (method === 'PUT') {
+      requireRole(session, ['admin']);
+      const settings = await updateOrganizationSettings(session, await readJson(req));
+      return sendJson(res, settings);
+    }
+  }
+
   if (method === 'POST' && path === '/api/import/preview') {
     requireRole(session, ['admin', 'it']);
-    enforceRateLimit(req, 'upload', 30, 60 * 60_000);
+    await enforceRateLimit(req, 'upload', 30, 60 * 60_000);
     const upload = await readMultipartForm(req, maxUploadBytes);
     if (!upload.file.originalName.toLowerCase().endsWith('.csv')) {
       throw badRequest('Only CSV files are supported in the SaaS MVP');
@@ -808,21 +821,26 @@ async function createAsset(organizationId, input) {
     if (!person) throw badRequest('Person does not belong to this organization');
   }
   try {
-    await db.run(`
-      INSERT INTO assets (
-        id, organization_id, asset_tag, serial_number, model_name, status, person_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      id,
-      organizationId,
-      assetTag,
-      serialNumber,
-      clean(input.modelName),
-      personId ? 'assigned' : normalizeStatus(input.status),
-      personId,
-      now,
-      now
-    ]);
+    await db.transaction(async (tx) => {
+      await tx.run(`
+        INSERT INTO assets (
+          id, organization_id, asset_tag, serial_number, model_name, status, person_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        id,
+        organizationId,
+        assetTag,
+        serialNumber,
+        clean(input.modelName),
+        personId ? 'assigned' : normalizeStatus(input.status),
+        personId,
+        now,
+        now
+      ]);
+      if (personId) {
+        await openAssignment(tx, organizationId, id, personId, now, 'manual');
+      }
+    });
   } catch (error) {
     if (isUniqueViolation(error)) {
       throw badRequest('assetTag or serialNumber already exists in this organization');
@@ -862,21 +880,28 @@ async function updateAsset(organizationId, id, input) {
   else if (input.status !== undefined) status = normalizeStatus(input.status);
   else status = existing.person_id ? 'in_stock' : existing.status;
 
+  const now = new Date().toISOString();
   try {
-    await db.run(`
-      UPDATE assets
-      SET asset_tag = ?, serial_number = ?, model_name = ?, status = ?, person_id = ?, updated_at = ?
-      WHERE id = ? AND organization_id = ?
-    `, [
-      assetTag,
-      serialNumber,
-      pick(input.modelName, existing.model_name),
-      status,
-      personId,
-      new Date().toISOString(),
-      id,
-      organizationId
-    ]);
+    await db.transaction(async (tx) => {
+      await tx.run(`
+        UPDATE assets
+        SET asset_tag = ?, serial_number = ?, model_name = ?, status = ?, person_id = ?, updated_at = ?
+        WHERE id = ? AND organization_id = ?
+      `, [
+        assetTag,
+        serialNumber,
+        pick(input.modelName, existing.model_name),
+        status,
+        personId,
+        now,
+        id,
+        organizationId
+      ]);
+      if ((existing.person_id || null) !== personId) {
+        await closeOpenAssignment(tx, id, now, personId ? 'reassign' : 'return');
+        if (personId) await openAssignment(tx, organizationId, id, personId, now, 'manual');
+      }
+    });
   } catch (error) {
     if (isUniqueViolation(error)) {
       throw badRequest('assetTag or serialNumber already exists in this organization');
@@ -900,25 +925,40 @@ async function deleteAsset(organizationId, id) {
 }
 
 async function createImportPreview(session, upload) {
-  const [existingAssets, existingPeople] = await Promise.all([
+  const [existingAssets, existingPeople, policy] = await Promise.all([
     listAssets(session.organizationId),
-    listPeople(session.organizationId)
+    listPeople(session.organizationId),
+    loadImportPolicy(session.organizationId)
   ]);
   const preview = buildSaasImportPreview({
     buffer: upload.file.buffer,
     fileName: upload.file.originalName,
     source: upload.fields.source || 'auto',
     existingAssets,
-    existingPeople
+    existingPeople,
+    policy
   });
   const batchId = randomUUID();
   const now = new Date().toISOString();
+  const policySnapshot = {
+    excludedEmails: [...policy.excludedEmails],
+    excludedNameRules: policy.excludedNameRules.map((rule) => ({
+      id: rule.id,
+      tokens: [...rule.tokens]
+    })),
+    identityGroups: policy.identityGroups.map((group) => ({
+      emails: [...group.emails],
+      firstName: group.firstName,
+      lastName: group.lastName
+    })),
+    modelOverrides: { ...policy.modelOverrides }
+  };
 
   await db.transaction(async (tx) => {
     await tx.run(`
       INSERT INTO import_batches (
-        id, organization_id, user_id, source, file_name, status, summary_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, 'preview', ?, ?)
+        id, organization_id, user_id, source, file_name, status, summary_json, policy_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, 'preview', ?, ?, ?)
     `, [
       batchId,
       session.organizationId,
@@ -926,6 +966,7 @@ async function createImportPreview(session, upload) {
       preview.source,
       preview.fileName,
       JSON.stringify(preview.summary),
+      JSON.stringify(policySnapshot),
       now
     ]);
 
@@ -985,6 +1026,7 @@ async function applyImportBatch(session, input) {
   let created = 0;
   let updated = 0;
   let peopleCreated = 0;
+  const source = batch.source || 'import';
 
   await db.transaction(async (tx) => {
     for (const stored of selected) {
@@ -1020,42 +1062,63 @@ async function applyImportBatch(session, input) {
         personId = person.id;
       }
 
-      const existing = await tx.get(`
-        SELECT id, status FROM assets
-        WHERE organization_id = ? AND LOWER(serial_number) = LOWER(?)
-      `, [session.organizationId, row.serialNumber]);
+      const externalIds = buildExternalIds(source, row.externalId);
+      const importMeta = {
+        source,
+        lastImportedAt: now,
+        lastImportFile: batch.file_name || '',
+        missingFromLastImport: false
+      };
+      const existing = await findAssetForImport(tx, session.organizationId, row);
+
       if (existing) {
+        const previousPersonId = existing.person_id || null;
         await tx.run(`
           UPDATE assets
-          SET asset_tag = ?, model_name = ?, status = ?, person_id = ?, updated_at = ?
+          SET asset_tag = ?, model_name = ?, status = ?, person_id = ?,
+              external_ids_json = ?, import_meta_json = ?, updated_at = ?
           WHERE id = ? AND organization_id = ?
         `, [
           row.assetTag,
           row.modelName,
           personId ? 'assigned' : existing.status,
           personId,
+          JSON.stringify(mergeJson(existing.external_ids_json, externalIds)),
+          JSON.stringify(importMeta),
           now,
           existing.id,
           session.organizationId
         ]);
+        if (previousPersonId !== personId) {
+          await closeOpenAssignment(tx, existing.id, now, `Import ${source}`);
+          if (personId) {
+            await openAssignment(tx, session.organizationId, existing.id, personId, now, source);
+          }
+        }
         updated += 1;
       } else {
+        const assetId = randomUUID();
         await tx.run(`
           INSERT INTO assets (
             id, organization_id, asset_tag, serial_number, model_name,
-            status, person_id, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            status, person_id, external_ids_json, import_meta_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
-          randomUUID(),
+          assetId,
           session.organizationId,
           row.assetTag,
           row.serialNumber,
           row.modelName,
           personId ? 'assigned' : 'in_stock',
           personId,
+          JSON.stringify(externalIds),
+          JSON.stringify(importMeta),
           now,
           now
         ]);
+        if (personId) {
+          await openAssignment(tx, session.organizationId, assetId, personId, now, source);
+        }
         created += 1;
       }
     }
@@ -1090,6 +1153,159 @@ async function applyImportBatch(session, input) {
   };
   await addAudit(session, 'import.apply', 'import_batch', batchId, summary);
   return { ok: true, batchId, summary };
+}
+
+async function findAssetForImport(tx, organizationId, row) {
+  const externalId = clean(row.externalId);
+  if (externalId) {
+    // External ids are stored as JSON; both dialects support LIKE for a first pass.
+    const byExternal = await tx.all(`
+      SELECT id, status, person_id, external_ids_json, import_meta_json
+      FROM assets
+      WHERE organization_id = ? AND external_ids_json LIKE ?
+    `, [organizationId, `%${externalId}%`]);
+    const match = byExternal.find((asset) => {
+      const ids = parseJson(asset.external_ids_json, {});
+      return Object.values(ids).some((value) => clean(value) === externalId);
+    });
+    if (match) return match;
+  }
+  if (clean(row.serialNumber)) {
+    const bySerial = await tx.get(`
+      SELECT id, status, person_id, external_ids_json, import_meta_json
+      FROM assets
+      WHERE organization_id = ? AND LOWER(serial_number) = LOWER(?)
+    `, [organizationId, row.serialNumber]);
+    if (bySerial) return bySerial;
+  }
+  if (clean(row.assetTag)) {
+    return tx.get(`
+      SELECT id, status, person_id, external_ids_json, import_meta_json
+      FROM assets
+      WHERE organization_id = ? AND LOWER(asset_tag) = LOWER(?)
+    `, [organizationId, row.assetTag]);
+  }
+  return null;
+}
+
+function buildExternalIds(source, externalId) {
+  const value = clean(externalId);
+  if (!value) return {};
+  if (source === 'jamf') return { jamfComputerId: value };
+  return { intuneDeviceId: value };
+}
+
+async function openAssignment(tx, organizationId, assetId, personId, startedAt, source) {
+  await tx.run(`
+    INSERT INTO asset_assignments (
+      id, organization_id, asset_id, person_id, started_at, ended_at, end_reason, source
+    ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?)
+  `, [randomUUID(), organizationId, assetId, personId, startedAt, source]);
+}
+
+async function closeOpenAssignment(tx, assetId, endedAt, endReason) {
+  await tx.run(`
+    UPDATE asset_assignments
+    SET ended_at = ?, end_reason = ?
+    WHERE asset_id = ? AND ended_at IS NULL
+  `, [endedAt, endReason, assetId]);
+}
+
+async function getOrganizationSettings(organizationId) {
+  const row = await db.get(
+    'SELECT * FROM organization_settings WHERE organization_id = ?',
+    [organizationId]
+  );
+  if (!row) {
+    return {
+      excludedEmails: [],
+      excludedNameRules: [],
+      identityGroups: [],
+      modelOverrides: {}
+    };
+  }
+  return {
+    excludedEmails: parseJson(row.excluded_emails_json, []),
+    excludedNameRules: parseJson(row.excluded_name_rules_json, []),
+    identityGroups: parseJson(row.identity_groups_json, []),
+    modelOverrides: parseJson(row.model_overrides_json, {})
+  };
+}
+
+async function updateOrganizationSettings(session, input) {
+  const before = await getOrganizationSettings(session.organizationId);
+  const next = {
+    excludedEmails: Array.isArray(input.excludedEmails)
+      ? [...new Set(input.excludedEmails.map((value) => clean(value).toLowerCase()).filter(Boolean))]
+      : before.excludedEmails,
+    excludedNameRules: Array.isArray(input.excludedNameRules)
+      ? input.excludedNameRules
+        .map((rule, index) => ({
+          id: clean(rule.id) || `rule-${index + 1}`,
+          tokens: (rule.tokens || []).map((token) => clean(token).toLowerCase()).filter(Boolean)
+        }))
+        .filter((rule) => rule.tokens.length)
+      : before.excludedNameRules,
+    identityGroups: Array.isArray(input.identityGroups)
+      ? input.identityGroups.map((group) => ({
+          emails: [...new Set((group.emails || []).map((email) => clean(email).toLowerCase()).filter(Boolean))],
+          firstName: clean(group.firstName),
+          lastName: clean(group.lastName)
+        }))
+      : before.identityGroups,
+    modelOverrides: input.modelOverrides && typeof input.modelOverrides === 'object'
+      ? { ...input.modelOverrides }
+      : before.modelOverrides
+  };
+  const now = new Date().toISOString();
+  await db.run(`
+    INSERT INTO organization_settings (
+      organization_id, excluded_emails_json, excluded_name_rules_json,
+      identity_groups_json, model_overrides_json, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT (organization_id) DO UPDATE SET
+      excluded_emails_json = ?,
+      excluded_name_rules_json = ?,
+      identity_groups_json = ?,
+      model_overrides_json = ?,
+      updated_at = ?
+  `, [
+    session.organizationId,
+    JSON.stringify(next.excludedEmails),
+    JSON.stringify(next.excludedNameRules),
+    JSON.stringify(next.identityGroups),
+    JSON.stringify(next.modelOverrides),
+    now,
+    JSON.stringify(next.excludedEmails),
+    JSON.stringify(next.excludedNameRules),
+    JSON.stringify(next.identityGroups),
+    JSON.stringify(next.modelOverrides),
+    now
+  ]);
+  await addAudit(session, 'settings.update', 'organization', session.organizationId, {
+    before,
+    after: next
+  });
+  return next;
+}
+
+async function loadImportPolicy(organizationId) {
+  const settings = await getOrganizationSettings(organizationId);
+  return createImportPolicy(settings);
+}
+
+function parseJson(value, fallback) {
+  if (value == null || value === '') return fallback;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function mergeJson(existingRaw, patch) {
+  return { ...parseJson(existingRaw, {}), ...patch };
 }
 
 async function addAudit(session, action, entityType, entityId = '', details = {}) {
@@ -1181,20 +1397,52 @@ function isUniqueViolation(error) {
   return error?.code === '23505' || String(error?.message || '').toLowerCase().includes('unique');
 }
 
-function enforceRateLimit(req, bucket, limit, windowMs) {
-  const key = `${bucket}:${clientIp(req)}`;
+async function enforceRateLimit(req, bucket, limit, windowMs) {
+  const clientKey = clientIp(req);
   const now = Date.now();
-  const current = rateLimits.get(key);
-  if (!current || current.resetAt <= now) {
-    rateLimits.set(key, { count: 1, resetAt: now + windowMs });
-    cleanupRateLimits(now);
+  const windowStart = now - (now % windowMs);
+  try {
+    const existing = await db.get(`
+      SELECT count FROM rate_limits
+      WHERE bucket = ? AND client_key = ? AND window_start = ?
+    `, [bucket, clientKey, windowStart]);
+    const count = Number(existing?.count || 0) + 1;
+    if (count > limit) {
+      const error = new Error('Too many requests. Try again later.');
+      error.status = 429;
+      throw error;
+    }
+    if (existing) {
+      await db.run(`
+        UPDATE rate_limits SET count = ?
+        WHERE bucket = ? AND client_key = ? AND window_start = ?
+      `, [count, bucket, clientKey, windowStart]);
+    } else {
+      await db.run(`
+        INSERT INTO rate_limits (bucket, client_key, window_start, count)
+        VALUES (?, ?, ?, 1)
+      `, [bucket, clientKey, windowStart]);
+      // Opportunistic prune of windows that can no longer match.
+      if (Math.random() < 0.02) {
+        await db.run('DELETE FROM rate_limits WHERE window_start < ?', [now - windowMs * 2]);
+      }
+    }
     return;
-  }
-  current.count += 1;
-  if (current.count > limit) {
-    const error = new Error('Too many requests. Try again later.');
-    error.status = 429;
-    throw error;
+  } catch (error) {
+    if (error.status === 429) throw error;
+    // Fall back to the in-memory map if the table is unavailable mid-migration.
+    const key = `${bucket}:${clientKey}`;
+    const current = rateLimits.get(key);
+    if (!current || current.resetAt <= now) {
+      rateLimits.set(key, { count: 1, resetAt: now + windowMs });
+      return;
+    }
+    current.count += 1;
+    if (current.count > limit) {
+      const limited = new Error('Too many requests. Try again later.');
+      limited.status = 429;
+      throw limited;
+    }
   }
 }
 
@@ -1212,13 +1460,6 @@ function clientIp(req) {
     .map((value) => value.trim())
     .filter(Boolean);
   return forwarded[forwarded.length - trustedProxies] || socketIp;
-}
-
-function cleanupRateLimits(now) {
-  if (rateLimits.size < 1_000) return;
-  for (const [key, value] of rateLimits) {
-    if (value.resetAt <= now) rateLimits.delete(key);
-  }
 }
 
 function addSecurityHeaders(req, res) {

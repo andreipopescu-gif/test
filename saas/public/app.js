@@ -177,6 +177,7 @@ function renderApp() {
         <button type="button" data-tab="assets" class="${state.tab === 'assets' ? 'active' : ''}">Devices</button>
         ${canWrite() ? `<button type="button" data-tab="import" class="${state.tab === 'import' ? 'active' : ''}">Import</button>` : ''}
         ${state.me.role !== 'readonly' ? `<button type="button" data-tab="members" class="${state.tab === 'members' ? 'active' : ''}">Members</button>` : ''}
+        ${state.me.role === 'admin' || state.me.role === 'it' ? `<button type="button" data-tab="settings" class="${state.tab === 'settings' ? 'active' : ''}">Settings</button>` : ''}
         <button type="button" data-tab="account" class="${state.tab === 'account' ? 'active' : ''}">Account</button>
       </div>
       <div class="actions" style="margin-top:0">
@@ -215,6 +216,7 @@ function renderApp() {
   if (state.tab === 'people') renderPeople();
   else if (state.tab === 'assets') renderAssets();
   else if (state.tab === 'import') renderImport();
+  else if (state.tab === 'settings') renderSettings();
   else if (state.tab === 'account') renderAccount();
   else renderMembers();
 }
@@ -626,6 +628,40 @@ async function renderMembers() {
       await api(`/api/members/${button.dataset.removeMember}`, { method: 'DELETE' });
       await renderMembers();
     });
+  });
+}
+
+async function renderSettings() {
+  const settings = await api('/api/settings');
+  const canEdit = state.me.role === 'admin';
+  const target = document.querySelector('#tabContent');
+  if (!target || state.tab !== 'settings') return;
+  target.innerHTML = `
+    <section class="panel">
+      <h2>Import exclusions</h2>
+      <p class="muted">
+        People matching these addresses are never created from an Intune or Jamf
+        import. Each organization has its own list.
+      </p>
+      <form id="settingsForm" class="grid">
+        <label style="grid-column:1/-1">Excluded emails
+          <textarea name="excludedEmails" rows="6" ${canEdit ? '' : 'readonly'}>${escapeHtml((settings.excludedEmails || []).join('\n'))}</textarea>
+        </label>
+        ${canEdit ? `<div class="actions" style="grid-column:1/-1"><button class="primary">Save settings</button></div>` : ''}
+      </form>
+      <p id="settingsResult" class="muted"></p>
+    </section>
+  `;
+  document.querySelector('#settingsForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const raw = new FormData(event.currentTarget).get('excludedEmails');
+    const excludedEmails = String(raw || '').split(/[\n,;]+/).map((value) => value.trim()).filter(Boolean);
+    try {
+      await api('/api/settings', { method: 'PUT', body: JSON.stringify({ excludedEmails }) });
+      document.querySelector('#settingsResult').textContent = 'Saved.';
+    } catch (error) {
+      document.querySelector('#settingsResult').textContent = error.message;
+    }
   });
 }
 
