@@ -5,6 +5,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const saasDir = join(__dirname, '..');
@@ -13,6 +14,12 @@ const jamfFixturePath = join(saasDir, '..', 'test', 'fixtures', 'jamf-macbooks-s
 
 test('two organizations stay isolated through CRUD, roles and CSV import', { timeout: 20_000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'itinv-saas-e2e-'));
+  // Against a persistent PostgreSQL the gate has to be rerunnable, so accounts
+  // cannot collide with a previous run.
+  const runId = randomUUID().slice(0, 8);
+  const alphaEmail = `alpha-${runId}@example.test`;
+  const betaEmail = `beta-${runId}@example.test`;
+  const readerEmail = `reader-${runId}@example.test`;
   const port = 18_000 + Math.floor(Math.random() * 1_000);
   const baseUrl = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ['src/server.js'], {
@@ -38,7 +45,7 @@ test('two organizations stay isolated through CRUD, roles and CSV import', { tim
       body: {
         orgName: 'Alpha Company',
         name: 'Alpha Admin',
-        email: 'alpha@example.test',
+        email: alphaEmail,
         password: 'password-alpha'
       }
     });
@@ -47,7 +54,7 @@ test('two organizations stay isolated through CRUD, roles and CSV import', { tim
       body: {
         orgName: 'Beta Company',
         name: 'Beta Admin',
-        email: 'beta@example.test',
+        email: betaEmail,
         password: 'password-beta'
       }
     });
@@ -85,7 +92,7 @@ test('two organizations stay isolated through CRUD, roles and CSV import', { tim
     const readonlyInvite = await jsonRequest(baseUrl, '/api/invitations', {
       method: 'POST',
       token: orgA.token,
-      body: { email: 'reader@example.test', role: 'readonly' }
+      body: { email: readerEmail, role: 'readonly' }
     });
     const invitationToken = new URL(readonlyInvite.inviteUrl).searchParams.get('invite');
     const reader = await jsonRequest(baseUrl, '/api/invitations/accept', {
@@ -102,7 +109,7 @@ test('two organizations stay isolated through CRUD, roles and CSV import', { tim
     const multiOrgInvite = await jsonRequest(baseUrl, '/api/invitations', {
       method: 'POST',
       token: orgB.token,
-      body: { email: 'alpha@example.test', role: 'it' }
+      body: { email: alphaEmail, role: 'it' }
     });
     await jsonRequest(baseUrl, '/api/invitations/accept', {
       method: 'POST',
@@ -113,7 +120,7 @@ test('two organizations stay isolated through CRUD, roles and CSV import', { tim
     });
     const organizationChoice = await jsonRequest(baseUrl, '/api/auth/login', {
       method: 'POST',
-      body: { email: 'alpha@example.test', password: 'password-alpha' }
+      body: { email: alphaEmail, password: 'password-alpha' }
     });
     assert.equal(organizationChoice.requiresOrganization, true);
     assert.equal(organizationChoice.organizations.length, 2);
@@ -197,7 +204,7 @@ test('two organizations stay isolated through CRUD, roles and CSV import', { tim
 
     const audit = await jsonRequest(baseUrl, '/api/audit', { token: orgA.token });
     assert.ok(audit.some((item) => item.action === 'import.apply'));
-    assert.ok(audit.every((item) => !String(item.userEmail || '').includes('beta@')));
+    assert.ok(audit.every((item) => !String(item.userEmail || '').includes(betaEmail)));
   } catch (error) {
     error.message += `\nServer output:\n${serverOutput}`;
     throw error;

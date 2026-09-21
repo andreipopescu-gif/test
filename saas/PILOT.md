@@ -47,6 +47,38 @@ credentials, the verification matrix and the teardown limits.
 8. Delete or anonymize pilot data if the client does not continue
    (`npm run reset:test`, plus the manual SQL it prints).
 
+## Backup and tested restore
+
+The hosting provider's snapshots are not the backup strategy: the free
+PostgreSQL plan has none, and a provider-held snapshot disappears with the
+account. Take an independent dump before anything that touches the database —
+a plan change, a migration, or the end of a pilot.
+
+```bash
+cd saas
+DATABASE_URL=<connection string> BACKUP_DIR=~/itinv-backups npm run backup
+```
+
+The script writes a compressed custom-format dump, refuses a suspiciously small
+file, verifies the table of contents with `pg_restore --list`, and prunes dumps
+older than `BACKUP_RETAIN_DAYS` (default 30).
+
+An untested backup is not a backup. Restore into a scratch database and run the
+suite against the restored copy:
+
+```bash
+createdb itinv_restore_check
+pg_restore --dbname=postgresql://…/itinv_restore_check --no-owner <dump file>
+cd saas
+TEST_DATABASE_URL=postgresql://…/itinv_restore_check \
+  DATABASE_URL=postgresql://…/itinv_restore_check npm run test:postgres
+```
+
+Last verified run, on a local PostgreSQL 16 with a freshly migrated schema:
+dump 0.03 MB, restore 0.11 s, all four PostgreSQL tests green. Re-measure and
+update this line once the database holds real pilot data — the restore time is
+the number that matters during an incident.
+
 ## Exit criteria
 
 - no cross-organization data is visible;

@@ -1,0 +1,18 @@
+# A build context without this file bakes local databases, uploads and any
+# .env into the image, which then ships every secret it was built next to.
+.git
+.github
+node_modules
+saas/node_modules
+saas/data
+data
+dist
+install
+templates
+test
+scripts
+**/.env
+**/.env.*
+!**/.env.example
+*.log
+.DS_Store

@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [saas, local, main]
+  pull_request:
+
+jobs:
+  sqlite:
+    name: Tests (SQLite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Shared import and local app tests
+        run: node --test
+      - name: Install SaaS dependencies
+        run: npm ci
+        working-directory: saas
+      - name: SaaS tests
+        run: npm test
+        working-directory: saas
+        env:
+          SAAS_JWT_SECRET: ci-only-secret-not-used-anywhere-else
+      - name: Tenant isolation gate
+        run: npm run pilot:validate
+        working-directory: saas
+        env:
+          SAAS_JWT_SECRET: ci-only-secret-not-used-anywhere-else
+
+  postgres:
+    name: Tests (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: itinv
+          POSTGRES_PASSWORD: itinv
+          POSTGRES_DB: itinv_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U itinv"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install SaaS dependencies
+        run: npm ci
+        working-directory: saas
+      # Staging and production run on PostgreSQL, so the adapter, the migration
+      # lock and tenant isolation are verified against a real server here rather
+      # than discovered during a deploy.
+      - name: SaaS tests against PostgreSQL
+        run: npm run test:postgres
+        working-directory: saas
+        env:
+          SAAS_JWT_SECRET: ci-only-secret-not-used-anywhere-else
+          TEST_DATABASE_URL: postgresql://itinv:itinv@127.0.0.1:5432/itinv_test
+          DATABASE_URL: postgresql://itinv:itinv@127.0.0.1:5432/itinv_test
