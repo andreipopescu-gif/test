@@ -11,7 +11,16 @@ The offline Windows app stays on branch `local` (same repo).
 - Invitations with a 7-day acceptance link, member role changes and removal
 - People + devices scoped by `organizationId`, with edit, assign, reassign and
   return-to-stock
-- Intune/Jamf CSV preview + transactional apply per organization
+- Device detail with hardware fields, external ids and assignment history
+- Hardware catalog (categories, brands, models) seeded per organization on
+  first access from `seed/models.json`, extendable with your own models
+- Dashboard: device and people breakdowns, warranty windows, recent assignments
+- CSV reports (stock, per department, warranty 30/90, people without a device,
+  missing from the last MDM import, Teams Rooms) and a full device export
+- People merge that moves devices, assignment history and alternate addresses
+- Intune/Jamf CSV **or ZIP** preview + transactional apply per organization,
+  including owner changes and a flag for devices the MDM stopped reporting
+- Entra / Intune user CSV import for the people directory
 - Audit log for mutations, assignments and imports
 - Self-service password change that ends every other session
 - Organization deletion that removes its data and orphaned accounts
@@ -20,7 +29,9 @@ The offline Windows app stays on branch `local` (same repo).
 
 ## What is not here yet
 
-- Invoice PDF import, PV DOCX, advanced reports
+- Invoice PDF import, PV DOCX handover documents, JSON backup/restore
+- Catalog model resolution during import (rows keep the raw model text and a
+  device is linked to a catalog model by hand)
 - Microsoft/Google SSO
 - Hosted Intune/Jamf sync
 - Billing
