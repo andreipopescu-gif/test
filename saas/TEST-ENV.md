@@ -38,17 +38,28 @@ script exits non-zero if a verification check fails.
 
 ## Seeded accounts
 
-Each run prints its own credentials. The shape is fixed:
+E-mail addresses follow a fixed shape; passwords do not. Each account gets
+`Pilot!` plus 12 random bytes, generated per run and printed once by the script.
+Nothing about a password can be derived from the address, so a seeded account
+left running on staging is not an open door.
 
 | Role | E-mail | Password |
 | --- | --- | --- |
-| admin | `admin-a-<suffix>@pilot.test` | `Pilot-<suffix>-admin-a` |
-| it | `it-a-<suffix>@pilot.test` | `Pilot-<suffix>-it-a` |
-| readonly | `readonly-a-<suffix>@pilot.test` | `Pilot-<suffix>-ro-a` |
+| admin | `admin-a-<suffix>@pilot.test` | random, printed by the run |
+| it | `it-a-<suffix>@pilot.test` | random, printed by the run |
+| readonly | `readonly-a-<suffix>@pilot.test` | random, printed by the run |
 
-Organization B uses the same pattern with `-b`. These are throwaway pilot
-credentials for a staging instance holding only sample CSV data; do not reuse
-the pattern for anything that matters.
+Organization B uses the same address pattern with `-b`. Capture the output when
+the run finishes: the passwords are not stored anywhere and cannot be recovered.
+These are still throwaway credentials for an instance holding sample CSV data.
+
+When the target closes registration (any production host without
+`SAAS_ALLOW_REGISTRATION=true`), pass the shared token:
+
+```bash
+SEED_REGISTRATION_TOKEN=<token from the host environment> \
+  TARGET_URL=https://it-inventory-saas-staging.onrender.com npm run seed:test
+```
 
 ## Teardown
 

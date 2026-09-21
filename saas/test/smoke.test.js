@@ -29,3 +29,21 @@ test('sqlite schema creates organizations table', async () => {
   await db.close();
   await rm(dir, { recursive: true, force: true });
 });
+
+test('reopening a database applies each migration once', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'saas-db-'));
+  const dbPath = join(dir, 'migrations.sqlite');
+
+  const first = await openDatabase({ dbPath, databaseUrl: '' });
+  const afterFirst = await first.all('SELECT version FROM schema_migrations ORDER BY version');
+  await first.close();
+
+  const second = await openDatabase({ dbPath, databaseUrl: '' });
+  const afterSecond = await second.all('SELECT version FROM schema_migrations ORDER BY version');
+  await second.close();
+
+  const versions = afterSecond.map((entry) => Number(entry.version));
+  assert.deepEqual(versions, afterFirst.map((entry) => Number(entry.version)));
+  assert.equal(new Set(versions).size, versions.length);
+  await rm(dir, { recursive: true, force: true });
+});

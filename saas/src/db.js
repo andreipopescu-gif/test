@@ -116,8 +116,27 @@ async function openPostgres(databaseUrl) {
     }
   };
   adapter.close = () => pool.end();
-  await migrate(adapter, postgresMigrations);
+  await withMigrationLock(pool, () => migrate(adapter, postgresMigrations));
   return adapter;
+}
+
+// Migrations run inside the web process on boot, so two instances starting
+// together would otherwise apply the same version concurrently. The lock is
+// session-scoped, which means it has to be held on one dedicated connection
+// rather than on the pool.
+async function withMigrationLock(pool, run) {
+  const lockKey = `hashtext('it_inventory_migrations')`;
+  const client = await pool.connect();
+  try {
+    await client.query(`SELECT pg_advisory_lock(${lockKey})`);
+    return await run();
+  } finally {
+    try {
+      await client.query(`SELECT pg_advisory_unlock(${lockKey})`);
+    } finally {
+      client.release();
+    }
+  }
 }
 
 async function migrate(db, migrations) {
@@ -139,6 +158,7 @@ async function migrate(db, migrations) {
         [migration.version, new Date().toISOString()]
       );
     });
+    applied.add(migration.version);
   }
 }
 
