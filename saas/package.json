@@ -9,7 +9,9 @@
     "dev": "node --watch src/server.js",
     "test": "node --test",
     "pilot:validate": "node --test test/multitenant-import.test.js",
-    "check:staging": "node scripts/check-staging.js"
+    "check:staging": "node scripts/check-staging.js",
+    "seed:test": "node scripts/seed-test-env.js",
+    "reset:test": "node scripts/reset-test-env.js"
   },
   "dependencies": {
     "pg": "^8.16.3"

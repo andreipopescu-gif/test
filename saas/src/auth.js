@@ -1,6 +1,12 @@
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 
-const jwtSecret = () => process.env.SAAS_JWT_SECRET || 'dev-only-change-me';
+// No fallback secret: a shared default would let anyone mint valid tokens for
+// any organization on a deployment that merely forgot the variable.
+const jwtSecret = () => {
+  const secret = process.env.SAAS_JWT_SECRET;
+  if (!secret) throw new Error('SAAS_JWT_SECRET is not set');
+  return secret;
+};
 
 export function hashPassword(password) {
   const salt = randomBytes(16).toString('hex');

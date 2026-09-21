@@ -14,6 +14,7 @@ test('password hash verifies', () => {
 });
 
 test('jwt roundtrip', () => {
+  process.env.SAAS_JWT_SECRET = 'test-secret-for-jwt-roundtrip';
   const token = signToken({ sub: 'u1', org: 'o1', role: 'admin' }, 60);
   const payload = verifyToken(token);
   assert.equal(payload.sub, 'u1');

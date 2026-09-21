@@ -21,6 +21,13 @@ The gate creates two temporary organizations and verifies:
 
 Temporary data is deleted at the end.
 
+## Scripted pilot environment
+
+`npm run seed:test` provisions two organizations with admin, `it` and
+`readonly` accounts, imports both CSV fixtures and re-checks isolation against a
+running instance, local or staging. See [TEST-ENV.md](TEST-ENV.md) for the
+credentials, the verification matrix and the teardown limits.
+
 ## Staging pilot
 
 1. Deploy branch `saas` using the root `render.yaml`.
@@ -30,12 +37,15 @@ Temporary data is deleted at the end.
    STAGING_URL=https://your-staging-host npm run check:staging
    ```
 
-3. Create a test organization for the first client.
+3. Create a test organization for the first client, or run
+   `TARGET_URL=https://your-staging-host npm run seed:test` for a full
+   two-organization sandbox.
 4. Invite one `it` user and one `readonly` user.
 5. Import one recent Intune CSV and one Jamf CSV.
 6. Compare counts and five random serial numbers with the source exports.
 7. Confirm the read-only account cannot create, delete or import.
-8. Delete or anonymize pilot data if the client does not continue.
+8. Delete or anonymize pilot data if the client does not continue
+   (`npm run reset:test`, plus the manual SQL it prints).
 
 ## Exit criteria
 

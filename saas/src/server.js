@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join, dirname, extname, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { openDatabase } from './db.js';
 import { hashPassword, verifyPassword, signToken, verifyToken } from './auth.js';
 import {
@@ -21,11 +21,20 @@ const rootDir = join(__dirname, '..');
 const publicDir = join(rootDir, 'public');
 const host = process.env.HOST || '0.0.0.0';
 const port = Number(process.env.PORT || 8090);
-if (process.env.NODE_ENV === 'production' && !process.env.SAAS_JWT_SECRET) {
-  throw new Error('SAAS_JWT_SECRET is required in production');
+if (!process.env.SAAS_JWT_SECRET) {
+  throw new Error('SAAS_JWT_SECRET is required. Generate one with: openssl rand -hex 32');
 }
+// Registration has three states: closed, gated behind a shared token so pilots
+// can still be provisioned, or fully open for local development.
 const allowRegistration = process.env.SAAS_ALLOW_REGISTRATION !== 'false';
-const maxUploadBytes = Number(process.env.SAAS_MAX_UPLOAD_MB || 10) * 1024 * 1024;
+const registrationToken = process.env.SAAS_REGISTRATION_TOKEN || '';
+// An unparseable limit must fall back to the default, not to NaN, because every
+// size comparison against NaN is false and would disable the limit entirely.
+const maxUploadMb = Number(process.env.SAAS_MAX_UPLOAD_MB);
+const maxUploadBytes = (Number.isFinite(maxUploadMb) && maxUploadMb > 0 ? maxUploadMb : 10) * 1024 * 1024;
+// Render puts exactly one proxy in front of us; it appends the peer address to
+// any client-supplied X-Forwarded-For, so only the trailing entries are trusted.
+const trustedProxies = Math.max(0, Number(process.env.SAAS_TRUSTED_PROXIES) || 0);
 
 const db = await openDatabase();
 const rateLimits = new Map();
@@ -80,7 +89,13 @@ async function handleApi(req, res, url) {
       throw error;
     }
     enforceRateLimit(req, 'auth', 20, 15 * 60_000);
-    return sendJson(res, await register(await readJson(req)), 201);
+    const input = await readJson(req);
+    if (registrationToken && !matchesSecret(input.registrationToken, registrationToken)) {
+      const error = new Error('A valid registration token is required.');
+      error.status = 403;
+      throw error;
+    }
+    return sendJson(res, await register(input), 201);
   }
 
   if (method === 'POST' && path === '/api/auth/login') {
@@ -879,9 +894,7 @@ function isUniqueViolation(error) {
 }
 
 function enforceRateLimit(req, bucket, limit, windowMs) {
-  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  const ip = forwarded || req.socket.remoteAddress || 'unknown';
-  const key = `${bucket}:${ip}`;
+  const key = `${bucket}:${clientIp(req)}`;
   const now = Date.now();
   const current = rateLimits.get(key);
   if (!current || current.resetAt <= now) {
@@ -895,6 +908,22 @@ function enforceRateLimit(req, bucket, limit, windowMs) {
     error.status = 429;
     throw error;
   }
+}
+
+function matchesSecret(provided, expected) {
+  const a = Buffer.from(String(provided ?? ''));
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function clientIp(req) {
+  const socketIp = req.socket.remoteAddress || 'unknown';
+  if (!trustedProxies) return socketIp;
+  const forwarded = String(req.headers['x-forwarded-for'] || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return forwarded[forwarded.length - trustedProxies] || socketIp;
 }
 
 function cleanupRateLimits(now) {
