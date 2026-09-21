@@ -1,7 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
 import { postgresMigrations, sqliteMigrations } from './migrations.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -14,6 +13,14 @@ export async function openDatabase(options = {}) {
 }
 
 async function openSqlite(dbPath) {
+  // Imported lazily: node:sqlite is unavailable on Node builds without the
+  // experimental flag, and Postgres deployments must not depend on it.
+  let DatabaseSync;
+  try {
+    ({ DatabaseSync } = await import('node:sqlite'));
+  } catch {
+    throw new Error('SQLite is unavailable on this Node build. Set DATABASE_URL to use PostgreSQL.');
+  }
   mkdirSync(dirname(dbPath), { recursive: true });
   const raw = new DatabaseSync(dbPath);
   raw.exec('PRAGMA foreign_keys = ON;');

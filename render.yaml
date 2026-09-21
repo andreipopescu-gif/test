@@ -28,7 +28,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: NODE_VERSION
-        value: 22.12.0
+        value: 24.9.0
       - key: SAAS_JWT_SECRET
         generateValue: true
       - key: DATABASE_URL
