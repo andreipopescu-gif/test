@@ -157,7 +157,7 @@ test('CSV import of the same Entra and Jamf data yields the same issues as the c
   });
 });
 
-test('live connectors declare least-privilege scopes and refuse to sync yet', { timeout: 60_000 }, async () => {
+test('live connectors declare least-privilege scopes; Jamf is still stubbed', { timeout: 60_000 }, async () => {
   await withServer(async (api) => {
     const admin = await api.register(`Live ${randomUUID().slice(0, 6)}`);
     const { providers, canStoreCredentials } = await api.get('/api/connections', admin.token);
@@ -179,6 +179,46 @@ test('live connectors declare least-privilege scopes and refuse to sync yet', { 
     assert.equal(listed.connection.hasCredentials, false);
     assert.equal('encryptedCredentials' in listed.connection, false);
   });
+});
+
+test('live Entra sync imports Graph users through the normal pipeline', { timeout: 60_000 }, async () => {
+  const graph = await startMockGraph();
+  try {
+    await withServer(async (api) => {
+      const admin = await api.register(`Graph ${randomUUID().slice(0, 6)}`);
+      const saved = await api.put('/api/connections/entra', admin.token, {
+        credentials: {
+          tenantId: 'tenant-live',
+          clientId: 'client-live',
+          clientSecret: 'secret-live'
+        }
+      });
+      assert.equal(saved.connection.status, 'configured');
+      assert.equal(saved.connection.hasCredentials, true);
+
+      const sync = await api.post('/api/connections/entra/sync', admin.token, {});
+      assert.equal(sync.users.created, 2);
+      assert.ok(sync.exceptions);
+
+      const people = await api.get('/api/people', admin.token);
+      const emails = people.map((person) => person.email).sort();
+      assert.deepEqual(emails, ['ana.pop@contoso.test', 'maria.stan@contoso.test']);
+      const maria = people.find((person) => person.email.startsWith('maria'));
+      assert.equal(maria.status, 'inactive');
+      assert.equal(maria.sourcePresence.entra.enabled, false);
+
+      const listed = (await api.get('/api/connections', admin.token)).providers.find((item) => item.key === 'entra');
+      assert.equal(listed.connection.status, 'connected');
+      assert.ok(listed.connection.lastSyncAt);
+      assert.equal(listed.connection.lastError, null);
+    }, {
+      SAAS_CONNECTOR_KEY: 'test-connector-key',
+      SAAS_GRAPH_LOGIN_URL: graph.loginBase,
+      SAAS_GRAPH_BASE_URL: graph.graphBase
+    });
+  } finally {
+    await graph.close();
+  }
 });
 
 test('connector credentials are encrypted at rest when a key is configured', {
@@ -217,6 +257,8 @@ async function withServer(run, extraEnv = {}) {
     SAAS_REGISTRATION_TOKEN: '',
     SAAS_PUBLIC_URL: '',
     SAAS_CONNECTOR_KEY: '',
+    SAAS_GRAPH_LOGIN_URL: '',
+    SAAS_GRAPH_BASE_URL: '',
     PORT: String(port),
     HOST: '127.0.0.1',
     SAAS_DB_PATH: dbPath,
@@ -241,6 +283,75 @@ async function withServer(run, extraEnv = {}) {
     if (child.exitCode === null) await new Promise((resolve) => child.once('exit', resolve));
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Tiny stand-in for login.microsoftonline.com + graph.microsoft.com so the
+ * live Entra sync path is covered without calling Microsoft.
+ */
+async function startMockGraph() {
+  const { createServer } = await import('node:http');
+  const users = [
+    {
+      id: '11111111-1111-4111-8111-111111111111',
+      userPrincipalName: 'ana.pop@contoso.test',
+      mail: 'ana.pop@contoso.test',
+      displayName: 'Ana Pop',
+      givenName: 'Ana',
+      surname: 'Pop',
+      department: 'Engineering',
+      jobTitle: 'Developer',
+      accountEnabled: true,
+      officeLocation: 'Bucharest',
+      mobilePhone: '',
+      businessPhones: [],
+      manager: { displayName: 'Radu Marin' }
+    },
+    {
+      id: '22222222-2222-4222-8222-222222222222',
+      userPrincipalName: 'maria.stan@contoso.test',
+      mail: 'maria.stan@contoso.test',
+      displayName: 'Maria Stan',
+      givenName: 'Maria',
+      surname: 'Stan',
+      department: 'Finance',
+      jobTitle: 'Accountant',
+      accountEnabled: false,
+      officeLocation: '',
+      mobilePhone: '',
+      businessPhones: [],
+      manager: { displayName: 'Ana Pop' }
+    }
+  ];
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    if (req.method === 'POST' && /\/oauth2\/v2\.0\/token$/.test(url.pathname)) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ token_type: 'Bearer', expires_in: 3600, access_token: 'mock-graph-token' }));
+      return;
+    }
+    if (req.method === 'GET' && url.pathname.startsWith('/v1.0/users')) {
+      const auth = req.headers.authorization || '';
+      if (auth !== 'Bearer mock-graph-token') {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Unauthorized' } }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ value: users }));
+      return;
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: `No route ${req.method} ${url.pathname}` } }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const base = `http://127.0.0.1:${port}`;
+  return {
+    loginBase: base,
+    graphBase: base,
+    close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+  };
 }
 
 function buildClient(baseUrl) {

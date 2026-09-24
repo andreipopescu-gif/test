@@ -738,12 +738,12 @@ Phases after Phase 3b follow that:
    `last_seen_at`, `exceptions`, `exception_events`, rule settings,
    `connections`), seven rules computed from imported data, Issues tab,
    dashboard cards, person/device overview, rule settings.
-2. **Live connectors — next, needs a test Entra tenant and Jamf instance.**
-   Entra: Graph `User.Read.All` with admin consent (client credentials), plus
-   `signInActivity` later for stale accounts. Jamf Pro: API client with a
-   read-only role on computers, mobile devices and users. Both plug into
-   `saas/src/connectors/` and reuse the import pipeline; add a scheduled sync
-   and per-connection error reporting.
+2. **Live connectors — Entra done; Jamf next.** Entra syncs via Graph
+   `User.Read.All` (client credentials, admin consent) through
+   `saas/src/connectors/entra.js` into the import + exception pipeline. Jamf
+   Pro still needs an API client with a read-only role. Add scheduled sync and
+   per-connection error reporting; later Entra `signInActivity` for stale
+   accounts.
 3. **Confirmed actions.** Start with "account disabled → device still
    assigned → alert → IT approves → mark for recovery / reassign", then
    Jamf lock or unassign behind an explicit confirmation, a dry-run view and
