@@ -411,6 +411,13 @@ But split the phase so the cheap, additive half lands *before* the pilot:
   indexed (`missing_from_last_import`, `model_id`, `intune_device_id`,
   `jamf_computer_id`).
 
+**Status (tenant-options follow-up):** migration 6 adds archive/sort on the
+catalog, `org_options`, `custom_field_defs`, `import_profiles`,
+`assets.location_key` / `custom_json`, and widens `import_batches.source`.
+Admins edit catalog/options/custom fields in Settings; import supports
+additional MDM presets with a column-mapping fallback and saved profiles.
+Intune, Jamf and Entra keep their existing mappers.
+
 ### Migrations
 
 ```
