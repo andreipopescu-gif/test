@@ -398,6 +398,66 @@ export const sqliteMigrations = [
       CREATE INDEX IF NOT EXISTS idx_import_batches_org ON import_batches(organization_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_import_rows_batch ON import_rows(batch_id);
     `
+  },
+  {
+    version: 7,
+    sql: `
+      ALTER TABLE people ADD COLUMN source_presence_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE people ADD COLUMN manager_email TEXT;
+      ALTER TABLE people ADD COLUMN last_synced_at TEXT;
+      ALTER TABLE assets ADD COLUMN last_seen_at TEXT;
+      ALTER TABLE assets ADD COLUMN source_presence_json TEXT NOT NULL DEFAULT '{}';
+      CREATE INDEX IF NOT EXISTS idx_assets_org_last_seen ON assets(organization_id, last_seen_at);
+      ALTER TABLE organization_settings ADD COLUMN exception_rules_json TEXT NOT NULL DEFAULT '{}';
+
+      CREATE TABLE IF NOT EXISTS exceptions (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        rule_key TEXT NOT NULL,
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('person', 'asset')),
+        entity_id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        severity TEXT NOT NULL CHECK (severity IN ('high', 'medium', 'low')),
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'snoozed', 'resolved', 'dismissed')),
+        details_json TEXT NOT NULL DEFAULT '{}',
+        assignee_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        first_detected_at TEXT NOT NULL,
+        last_detected_at TEXT NOT NULL,
+        resolved_at TEXT,
+        resolved_by TEXT,
+        resolution TEXT,
+        snooze_until TEXT,
+        UNIQUE (organization_id, fingerprint)
+      );
+      CREATE INDEX IF NOT EXISTS idx_exceptions_org_status ON exceptions(organization_id, status);
+      CREATE INDEX IF NOT EXISTS idx_exceptions_org_entity ON exceptions(organization_id, entity_type, entity_id);
+
+      CREATE TABLE IF NOT EXISTS exception_events (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        exception_id TEXT NOT NULL REFERENCES exceptions(id) ON DELETE CASCADE,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL,
+        note TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_exception_events_exception ON exception_events(exception_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS connections (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'disconnected',
+        scopes_json TEXT NOT NULL DEFAULT '[]',
+        encrypted_credentials TEXT,
+        config_json TEXT NOT NULL DEFAULT '{}',
+        last_sync_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (organization_id, provider)
+      );
+    `
   }
 ];
 
@@ -569,6 +629,66 @@ export const postgresMigrations = [
 
       ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS profile_id TEXT REFERENCES import_profiles(id) ON DELETE SET NULL;
       ALTER TABLE import_batches DROP CONSTRAINT IF EXISTS import_batches_source_check;
+    `
+  },
+  {
+    version: 7,
+    sql: `
+      ALTER TABLE people ADD COLUMN IF NOT EXISTS source_presence_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE people ADD COLUMN IF NOT EXISTS manager_email TEXT;
+      ALTER TABLE people ADD COLUMN IF NOT EXISTS last_synced_at TEXT;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS last_seen_at TEXT;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS source_presence_json TEXT NOT NULL DEFAULT '{}';
+      CREATE INDEX IF NOT EXISTS idx_assets_org_last_seen ON assets(organization_id, last_seen_at);
+      ALTER TABLE organization_settings ADD COLUMN IF NOT EXISTS exception_rules_json TEXT NOT NULL DEFAULT '{}';
+
+      CREATE TABLE IF NOT EXISTS exceptions (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        rule_key TEXT NOT NULL,
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('person', 'asset')),
+        entity_id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        severity TEXT NOT NULL CHECK (severity IN ('high', 'medium', 'low')),
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'snoozed', 'resolved', 'dismissed')),
+        details_json TEXT NOT NULL DEFAULT '{}',
+        assignee_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        first_detected_at TEXT NOT NULL,
+        last_detected_at TEXT NOT NULL,
+        resolved_at TEXT,
+        resolved_by TEXT,
+        resolution TEXT,
+        snooze_until TEXT,
+        UNIQUE (organization_id, fingerprint)
+      );
+      CREATE INDEX IF NOT EXISTS idx_exceptions_org_status ON exceptions(organization_id, status);
+      CREATE INDEX IF NOT EXISTS idx_exceptions_org_entity ON exceptions(organization_id, entity_type, entity_id);
+
+      CREATE TABLE IF NOT EXISTS exception_events (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        exception_id TEXT NOT NULL REFERENCES exceptions(id) ON DELETE CASCADE,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL,
+        note TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_exception_events_exception ON exception_events(exception_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS connections (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'disconnected',
+        scopes_json TEXT NOT NULL DEFAULT '[]',
+        encrypted_credentials TEXT,
+        config_json TEXT NOT NULL DEFAULT '{}',
+        last_sync_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (organization_id, provider)
+      );
     `
   }
 ];

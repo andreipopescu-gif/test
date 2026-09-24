@@ -51,6 +51,16 @@ import {
   updateImportProfile
 } from './import-profiles.js';
 import { listPresets } from './import/mdm-presets.js';
+import {
+  getException,
+  listExceptions,
+  loadRuleSettings,
+  runExceptionScan,
+  saveRuleSettings,
+  summarizeExceptions,
+  updateException
+} from './exceptions/engine.js';
+import { RULES } from './exceptions/rules.js';
 import { assetsCsv, buildReportRows, reportTypes, rowsToCsv } from './reports.js';
 import { createImportPolicy } from '../../src/import/import-policy.js';
 import { isWarrantyExpiringWithinDays } from '../../src/utils/asset-model-label.js';
@@ -408,6 +418,67 @@ async function handleApi(req, res, url) {
     return sendJson(res, result);
   }
 
+  if (method === 'GET' && path === '/api/exceptions') {
+    return sendJson(res, await listExceptions(db, session.organizationId, {
+      status: url.searchParams.get('status') ?? 'active',
+      rule: url.searchParams.get('rule'),
+      severity: url.searchParams.get('severity'),
+      assignee: url.searchParams.get('assignee'),
+      entityType: url.searchParams.get('entityType'),
+      entityId: url.searchParams.get('entityId')
+    }));
+  }
+
+  if (method === 'GET' && path === '/api/exceptions/summary') {
+    return sendJson(res, await summarizeExceptions(db, session.organizationId));
+  }
+
+  if (method === 'GET' && path === '/api/exceptions/rules') {
+    return sendJson(res, {
+      rules: RULES.map(({ key, label, severity, entityType, suggestion }) => ({
+        key, label, severity, entityType, suggestion
+      })),
+      settings: await loadRuleSettings(db, session.organizationId)
+    });
+  }
+
+  if (method === 'PUT' && path === '/api/exceptions/rules') {
+    requireRole(session, ['admin']);
+    const settings = await saveRuleSettings(db, session.organizationId, await readJson(req));
+    await addAudit(session, 'exceptions.rules_update', 'organization', session.organizationId, settings);
+    const scan = await runExceptionScan(db, session.organizationId, { userId: session.userId });
+    return sendJson(res, { settings, scan });
+  }
+
+  if (method === 'POST' && path === '/api/exceptions/scan') {
+    requireRole(session, ['admin', 'it']);
+    const scan = await runExceptionScan(db, session.organizationId, { userId: session.userId });
+    await addAudit(session, 'exceptions.scan', 'organization', session.organizationId, scan);
+    return sendJson(res, scan);
+  }
+
+  if (method === 'GET' && path.startsWith('/api/exceptions/')) {
+    const exception = await getException(db, session.organizationId, path.split('/')[3]);
+    if (!exception) throw notFound('Exception not found');
+    return sendJson(res, exception);
+  }
+
+  if (method === 'PATCH' && path.startsWith('/api/exceptions/')) {
+    requireRole(session, ['admin', 'it']);
+    const id = path.split('/')[3];
+    const body = await readJson(req);
+    const exception = await updateException(db, session.organizationId, id, body, session.userId);
+    await addAudit(session, `exception.${clean(body.action)}`, 'exception', id, {
+      ruleKey: exception.ruleKey,
+      note: clean(body.note) || undefined
+    });
+    return sendJson(res, exception);
+  }
+
+  if (method === 'GET' && /^\/api\/people\/[^/]+\/overview$/.test(path)) {
+    return sendJson(res, await getPersonOverview(session.organizationId, path.split('/')[3]));
+  }
+
   if (method === 'GET' && path === '/api/reports') {
     return sendJson(res, reportTypes);
   }
@@ -438,7 +509,8 @@ async function handleApi(req, res, url) {
 
   if (method === 'POST' && path === '/api/import/apply') {
     requireRole(session, ['admin', 'it']);
-    return sendJson(res, await applyImportBatch(session, await readJson(req)));
+    const result = await applyImportBatch(session, await readJson(req));
+    return sendJson(res, { ...result, exceptions: await refreshExceptions(session) });
   }
 
   if (method === 'POST' && path === '/api/import/users/preview') {
@@ -451,13 +523,15 @@ async function handleApi(req, res, url) {
 
   if (method === 'POST' && path === '/api/import/users/apply') {
     requireRole(session, ['admin', 'it']);
-    return sendJson(res, await applyUserImportBatch(session, await readJson(req)));
+    const result = await applyUserImportBatch(session, await readJson(req));
+    return sendJson(res, { ...result, exceptions: await refreshExceptions(session) });
   }
 
   if (method === 'POST' && path === '/api/people/merge') {
     requireRole(session, ['admin', 'it']);
     const body = await readJson(req);
     const result = await mergePeople(session.organizationId, body);
+    await refreshExceptions(session);
     await addAudit(session, 'person.merge', 'person', result.person?.id || '', {
       absorbedId: result.absorbedId,
       movedAssets: result.movedAssets
@@ -471,6 +545,7 @@ async function handleApi(req, res, url) {
       requireRole(session, ['admin', 'it']);
       const person = await createPerson(session.organizationId, await readJson(req));
       await addAudit(session, 'person.create', 'person', person.id);
+    await refreshExceptions(session);
       return sendJson(res, person, 201);
     }
   }
@@ -480,6 +555,7 @@ async function handleApi(req, res, url) {
     const id = path.split('/')[3];
     const person = await updatePerson(session.organizationId, id, await readJson(req));
     await addAudit(session, 'person.update', 'person', id);
+    await refreshExceptions(session);
     return sendJson(res, person);
   }
 
@@ -488,6 +564,7 @@ async function handleApi(req, res, url) {
     const id = path.split('/')[3];
     await deletePerson(session.organizationId, id);
     await addAudit(session, 'person.delete', 'person', id);
+    await refreshExceptions(session);
     return sendJson(res, { ok: true, id });
   }
 
@@ -497,6 +574,7 @@ async function handleApi(req, res, url) {
       requireRole(session, ['admin', 'it']);
       const asset = await createAsset(session.organizationId, await readJson(req));
       await addAudit(session, 'asset.create', 'asset', asset.id);
+      await refreshExceptions(session);
       return sendJson(res, asset, 201);
     }
   }
@@ -520,6 +598,7 @@ async function handleApi(req, res, url) {
       id,
       assignmentChange || {}
     );
+    await refreshExceptions(session);
     return sendJson(res, asset);
   }
 
@@ -528,6 +607,7 @@ async function handleApi(req, res, url) {
     const id = path.split('/')[3];
     await deleteAsset(session.organizationId, id);
     await addAudit(session, 'asset.delete', 'asset', id);
+    await refreshExceptions(session);
     return sendJson(res, { ok: true, id });
   }
 
@@ -994,7 +1074,8 @@ async function listPeople(organizationId) {
   return (await db.all(`
     SELECT id, first_name AS "firstName", last_name AS "lastName", email, department,
            role_title AS role, status, external_ids_json AS "externalIdsJson",
-           custom_json AS "customJson",
+           custom_json AS "customJson", source_presence_json AS "sourcePresenceJson",
+           manager_email AS "manager", last_synced_at AS "lastSyncedAt",
            created_at AS "createdAt", updated_at AS "updatedAt"
     FROM people
     WHERE organization_id = ?
@@ -1003,8 +1084,10 @@ async function listPeople(organizationId) {
     ...row,
     externalIds: normalizePersonExternalIds(parseJson(row.externalIdsJson, {})),
     custom: parseJson(row.customJson, {}),
+    sourcePresence: parseJson(row.sourcePresenceJson, {}),
     externalIdsJson: undefined,
-    customJson: undefined
+    customJson: undefined,
+    sourcePresenceJson: undefined
   }));
 }
 
@@ -1280,6 +1363,7 @@ const assetColumns = `
   a.purchased_on AS "purchasedOn", a.vendor, a.notes, a.enrolled_at AS "enrolledAt",
   a.last_enrolled_at AS "lastEnrolledAt", a.status, a.person_id AS "personId",
   a.location_key AS "locationKey", a.custom_json AS "customJson",
+  a.last_seen_at AS "lastSeenAt", a.source_presence_json AS "sourcePresenceJson",
   a.external_ids_json AS "externalIdsJson", a.import_meta_json AS "importMetaJson",
   a.created_at AS "createdAt", a.updated_at AS "updatedAt",
   p.first_name AS "personFirstName", p.last_name AS "personLastName",
@@ -1303,10 +1387,41 @@ function presentAsset(row) {
     externalIds: parseJson(row.externalIdsJson, {}),
     importMeta: parseJson(row.importMetaJson, {}),
     custom: parseJson(row.customJson, {}),
+    sourcePresence: parseJson(row.sourcePresenceJson, {}),
     externalIdsJson: undefined,
     importMetaJson: undefined,
-    customJson: undefined
+    customJson: undefined,
+    sourcePresenceJson: undefined
   };
+}
+
+/**
+ * One place to answer "what does this person have": their devices with
+ * presence per source, plus open exceptions on the person or those devices.
+ */
+async function getPersonOverview(organizationId, personId) {
+  const person = (await listPeople(organizationId)).find((item) => item.id === personId);
+  if (!person) throw notFound('Person not found');
+  const assets = (await listAssets(organizationId)).filter((asset) => asset.personId === personId);
+  const active = await listExceptions(db, organizationId, { status: 'active' });
+  const assetIds = new Set(assets.map((asset) => asset.id));
+  const exceptions = active.filter((item) =>
+    (item.entityType === 'person' && item.entityId === personId)
+    || (item.entityType === 'asset' && assetIds.has(item.entityId))
+    || item.details?.person?.id === personId
+  );
+  return { person, assets, exceptions };
+}
+
+// Exceptions are derived data. A failed rescan must not fail the mutation that
+// triggered it; the next scan or import catches up.
+async function refreshExceptions(session) {
+  try {
+    return await runExceptionScan(db, session.organizationId, { userId: session.userId });
+  } catch (error) {
+    console.error('exception scan failed', error);
+    return null;
+  }
 }
 
 /** Asset detail with its person, full assignment history and import provenance. */
@@ -1357,7 +1472,10 @@ async function getAssetDetail(organizationId, id) {
       [row.modelId, organizationId]
     ) : null,
     assignments: history,
-    currentAssignment: history.find((item) => !item.endedAt) || null
+    currentAssignment: history.find((item) => !item.endedAt) || null,
+    exceptions: await listExceptions(db, organizationId, {
+      status: 'active', entityType: 'asset', entityId: id
+    })
   };
 }
 
@@ -1795,6 +1913,7 @@ async function applyImportBatch(session, input) {
           session.organizationId
         ]);
         touchedAssetIds.add(existing.id);
+        await recordAssetPresence(tx, session.organizationId, existing.id, source, row, now);
         if (previousPersonId !== personId) {
           await closeOpenAssignment(tx, existing.id, now, `Import ${source}`);
           if (personId) {
@@ -1828,6 +1947,7 @@ async function applyImportBatch(session, input) {
           ...importedAssetValues(row)
         ]);
         touchedAssetIds.add(assetId);
+        await recordAssetPresence(tx, session.organizationId, assetId, source, row, now);
         if (personId) {
           await openAssignment(tx, session.organizationId, assetId, personId, now, source);
         }
@@ -2078,15 +2198,17 @@ async function applyUserImportBatch(session, input) {
           existing.id,
           session.organizationId
         ]);
+        await recordPersonPresence(tx, session.organizationId, existing.id, batch.source, row, now);
         updated += 1;
       } else {
+        const personId = randomUUID();
         await tx.run(`
           INSERT INTO people (
             id, organization_id, first_name, last_name, email, department, role_title,
             status, external_ids_json, created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
-          randomUUID(),
+          personId,
           session.organizationId,
           clean(row.firstName) || 'Unknown',
           clean(row.lastName) || '-',
@@ -2098,6 +2220,7 @@ async function applyUserImportBatch(session, input) {
           now,
           now
         ]);
+        await recordPersonPresence(tx, session.organizationId, personId, batch.source, row, now);
         created += 1;
       }
     }
@@ -2117,6 +2240,53 @@ async function applyUserImportBatch(session, input) {
   const summary = { created, updated, skipped: rows.length - selected.length };
   await addAudit(session, 'import.users.apply', 'import_batch', batchId, summary);
   return { ok: true, batchId, summary };
+}
+
+/**
+ * Where a device or person was last seen, per source. The exception engine
+ * compares these instead of re-reading import notes, and a later live
+ * connector writes the same shape.
+ */
+async function recordAssetPresence(tx, organizationId, assetId, source, row, now) {
+  const current = await tx.get(
+    'SELECT source_presence_json AS "presence", last_seen_at AS "lastSeenAt" FROM assets WHERE id = ? AND organization_id = ?',
+    [assetId, organizationId]
+  );
+  const presence = parseJson(current?.presence, {});
+  const seenAt = clean(row.lastSeenAt) || null;
+  presence[presenceKey(source)] = {
+    importedAt: now,
+    seenAt,
+    externalId: clean(row.externalId),
+    reportedUserEmail: clean(row.person?.email).toLowerCase()
+  };
+  const latest = [current?.lastSeenAt, seenAt].filter(Boolean).sort().pop() || null;
+  await tx.run(
+    'UPDATE assets SET source_presence_json = ?, last_seen_at = ? WHERE id = ? AND organization_id = ?',
+    [JSON.stringify(presence), latest, assetId, organizationId]
+  );
+}
+
+async function recordPersonPresence(tx, organizationId, personId, source, row, now) {
+  const current = await tx.get(
+    'SELECT source_presence_json AS "presence" FROM people WHERE id = ? AND organization_id = ?',
+    [personId, organizationId]
+  );
+  const presence = parseJson(current?.presence, {});
+  presence[presenceKey(source)] = {
+    importedAt: now,
+    enabled: row.status !== 'inactive'
+  };
+  await tx.run(`
+    UPDATE people
+    SET source_presence_json = ?, manager_email = COALESCE(?, manager_email), last_synced_at = ?
+    WHERE id = ? AND organization_id = ?
+  `, [JSON.stringify(presence), clean(row.manager) || null, now, personId, organizationId]);
+}
+
+function presenceKey(source) {
+  const value = clean(source).toLowerCase() || 'import';
+  return value === 'intune_users' ? 'intune' : value;
 }
 
 async function findAssetForImport(tx, organizationId, row) {

@@ -247,6 +247,7 @@ export function buildSaasImportPreview({
       imei: clean(normalized.imei),
       enrolledAt: clean(normalized.enrolledAt),
       lastEnrolledAt: clean(normalized.lastEnrolledAt || normalized.lastSeen),
+      lastSeenAt: isoTimestamp(normalized.lastSeen || normalized.lastEnrolledAt),
       notes: buildImportNotes(normalized),
       externalId: clean(normalized.externalId),
       person,
@@ -405,6 +406,7 @@ export function buildSaasUserImportPreview({
       displayName: clean(normalized.displayName),
       department: clean(normalized.department),
       role: clean(normalized.role),
+      manager: clean(normalized.manager),
       status: normalized.status === 'inactive' ? 'inactive' : 'active',
       externalIds: {
         upn: key(normalized.externalIds?.upn),
@@ -615,6 +617,21 @@ function summarize(rows, total) {
     skip: rows.filter((row) => row.action === 'skip').length,
     warnings: rows.filter((row) => row.warnings.length).length
   };
+}
+
+// Check-in columns arrive as ISO strings, "2025-03-01 10:22" or Excel-style
+// dates; the exception engine needs a comparable instant, not a label.
+function isoTimestamp(value) {
+  const text = clean(value);
+  if (!text) return '';
+  const dmy = text.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})(?:[ T](\d{1,2}):(\d{2}))?/);
+  if (dmy) {
+    const [, day, month, year, hour = '0', minute = '0'] = dmy;
+    const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)));
+    return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+  }
+  const date = new Date(text.replace(/^(\d{4}-\d{2}-\d{2}) (\d)/, '$1T$2'));
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
 }
 
 function key(value) {
