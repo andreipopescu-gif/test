@@ -21,12 +21,17 @@ export async function ensureOptionsSeeded(db, organizationId) {
   );
   if (existing) return false;
 
-  const departments = await db.all(`
-    SELECT DISTINCT department AS label
+  const departmentRows = await db.all(`
+    SELECT department AS label
     FROM people
-    WHERE organization_id = ? AND department IS NOT NULL AND TRIM(department) <> ''
-    ORDER BY LOWER(label)
+    WHERE organization_id = ?
+      AND department IS NOT NULL
+      AND TRIM(department) <> ''
+    GROUP BY department
   `, [organizationId]);
+  const departments = departmentRows
+    .slice()
+    .sort((a, b) => clean(a.label).localeCompare(clean(b.label)));
 
   await db.transaction(async (tx) => {
     for (const status of DEFAULT_STATUSES) {
