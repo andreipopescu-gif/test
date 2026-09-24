@@ -13,14 +13,23 @@ The offline Windows app stays on branch `local` (same repo).
   return-to-stock
 - Device detail with hardware fields, external ids and assignment history
 - Hardware catalog (categories, brands, models) seeded per organization on
-  first access from `seed/models.json`, extendable with your own models
-- Dashboard: device and people breakdowns, warranty windows, recent assignments
+  first access from `saas/seed/catalog-default.json` (broad multi-brand defaults,
+  no client-specific MTR entries). Admins manage the tree in Settings → Catalog
+  (add, rename, archive, restore missing defaults)
+- Tenant-editable options: statuses (with dashboard `countsAs`), departments,
+  locations, plus custom fields on devices and people
+- Dashboard: device and people breakdowns (status buckets honor `countsAs`),
+  warranty windows, recent assignments
 - CSV reports (stock, per department, warranty 30/90, people without a device,
-  missing from the last MDM import, Teams Rooms) and a full device export
+  missing from the last MDM import, devices by category) and a full device export
 - People merge that moves devices, assignment history and alternate addresses
 - Intune/Jamf CSV **or ZIP** preview + transactional apply per organization,
   including catalog model resolution, owner changes and a flag for devices the
   MDM stopped reporting
+- Additional MDM device presets (Kandji, Mosyle, Workspace ONE, ChromeOS,
+  JumpCloud, NinjaOne, ManageEngine, Hexnode, Addigy, SOTI, generic) and user
+  presets (Google Workspace, Okta, JumpCloud) with column mapping, saved import
+  profiles and inline model fixes for `needs_review` rows
 - Entra / Intune user CSV import for the people directory
 - Audit log for mutations, assignments and imports
 - Self-service password change that ends every other session
@@ -32,7 +41,7 @@ The offline Windows app stays on branch `local` (same repo).
 
 - Invoice PDF import, PV DOCX handover documents, JSON backup/restore
 - Microsoft/Google SSO
-- Hosted Intune/Jamf sync
+- Hosted Intune/Jamf sync (API pull); CSV/ZIP import covers the same MDMs
 - Billing
 
 ## Run

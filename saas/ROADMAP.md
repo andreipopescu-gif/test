@@ -345,9 +345,11 @@ But split the phase so the cheap, additive half lands *before* the pilot:
   assignment history instead of a `person_id` snapshot that cannot be
   reconstructed later. Retrofitting history onto months of pilot data is
   impossible; retrofitting a catalog is merely tedious.
-- **3b, after the pilot, before the first paid contract (10 days):** the catalog
-  tables, `model-resolver.js` integration, `needsReview` rows, the
-  missing-from-MDM report and the UI.
+- **3b, done on branch `cursor/saas-tenant-options-e694`:** tenant-editable
+  catalog (archive/sort, reset-defaults), broad default seed without MTR,
+  org options (status/department/location with `countsAs`), custom fields,
+  multi-MDM presets + column mapping + import profiles, and Settings UI.
+  Intune/Jamf/Entra paths are unchanged; new presets sit alongside them.
 
 ### Work items — 3a
 
@@ -729,5 +731,6 @@ Concretely, in order:
   are not copy-pasted by hand.
 - **Phase 2** immediately after the pilot, before any second organization is
   onboarded with its own settings.
-- **Phase 3b**, then **Phase 4**, before the first signed contract.
+- **Phase 3b** (tenant catalog, options, multi-MDM import) is implemented;
+  remaining Phase 3 polish is optional before **Phase 4**.
 - **Phase 5** only against a paying customer's written requirement.
