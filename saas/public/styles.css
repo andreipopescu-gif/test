@@ -740,7 +740,14 @@ td.row-actions button {
 .issue p { margin: 0.25rem 0 0; }
 .issue strong { margin-right: 0.4rem; }
 .issue-next { color: var(--brand-ink); }
-.issue .row-actions { flex-wrap: wrap; justify-content: flex-end; }
+.issue > div:first-child { flex: 1 1 auto; min-width: 0; }
+.issue .row-actions {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 0.4rem;
+  justify-content: end;
+}
 .issue-list.compact li { padding: 0.35rem 0; }
 .presence {
   padding: 0.55rem 0.8rem;
@@ -748,9 +755,10 @@ td.row-actions button {
   background: var(--brand-soft);
   color: var(--brand-ink);
 }
+.presence-warn { background: var(--danger-soft); color: var(--danger); }
 .rule-list { display: grid; gap: 0.6rem; }
 .rule-list .checkbox { display: flex; gap: 0.6rem; align-items: flex-start; }
 @media (max-width: 720px) {
   .issue { flex-direction: column; }
-  .issue .row-actions { justify-content: flex-start; }
+  .issue .row-actions { justify-content: start; }
 }

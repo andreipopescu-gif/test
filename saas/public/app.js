@@ -988,7 +988,7 @@ function personOverviewPanel(overview) {
         </div>
         <button type="button" id="closePersonOverview" class="ghost">Close</button>
       </div>
-      <p class="presence">${escapeHtml(presenceLine(person.sourcePresence, { personStatus: person.status }))}</p>
+      <p class="presence ${person.status === 'inactive' ? 'presence-warn' : ''}">${escapeHtml(presenceLine(person.sourcePresence, { personStatus: person.status }))}</p>
       <h3>Devices</h3>
       <div class="table-wrap">
         <table>
