@@ -396,15 +396,18 @@ export function resolveGenericModel(catalog, { manufacturer, model, modelIdentif
     return { model: null, match: 'none', warnings: ['No model text to match.'] };
   }
 
-  const brand = findBrandByManufacturer(resolverCatalog.brands, manufacturer);
-  if (!brand) {
+  // Seed catalogs can repeat a manufacturer under several categories (e.g. Dell
+  // laptops vs monitors). Search every matching brand before falling back.
+  const brands = findBrandsByManufacturer(resolverCatalog.brands, manufacturer);
+  if (!brands.length) {
     warnings.push(`Unknown manufacturer: ${clean(manufacturer) || '-'}.`);
     return rankGenericModels(resolverCatalog.models, combined, warnings);
   }
 
-  const brandModels = resolverCatalog.models.filter((item) => item.brandId === brand.id);
+  const brandIds = new Set(brands.map((brand) => brand.id));
+  const brandModels = resolverCatalog.models.filter((item) => brandIds.has(item.brandId));
   if (!brandModels.length) {
-    warnings.push(`No models under brand ${brand.name}.`);
+    warnings.push(`No models under brand ${brands[0].name}.`);
     return { model: null, match: 'none', warnings };
   }
 
@@ -636,11 +639,19 @@ async function maxSortOrder(tx, table, organizationId, extraWhere = '', extraPar
 }
 
 function findBrandByManufacturer(brands, manufacturer) {
+  return findBrandsByManufacturer(brands, manufacturer)[0] || null;
+}
+
+function findBrandsByManufacturer(brands, manufacturer) {
   const needle = normalizeTokens(manufacturer);
-  if (!needle) return null;
-  return brands.find((brand) => normalizeTokens(brand.name) === needle)
-    || brands.find((brand) => normalizeTokens(brand.name).includes(needle))
-    || brands.find((brand) => needle.includes(normalizeTokens(brand.name)));
+  if (!needle) return [];
+  const exact = brands.filter((brand) => normalizeTokens(brand.name) === needle);
+  if (exact.length) return exact;
+  const partial = brands.filter((brand) => {
+    const name = normalizeTokens(brand.name);
+    return name.includes(needle) || needle.includes(name);
+  });
+  return partial;
 }
 
 function rankGenericModels(models, text, warnings = []) {

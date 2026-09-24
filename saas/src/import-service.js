@@ -497,7 +497,27 @@ function resolveImportModel(catalog, resolverCatalog, normalized, overrideModelI
 function tryDetectLegacyDeviceSource(headers) {
   try {
     const source = detectSource(headers, 'auto');
-    return LEGACY_DEVICE_SOURCES.includes(source) ? source : '';
+    if (!LEGACY_DEVICE_SOURCES.includes(source)) return '';
+    // Shared columns like "Serial Number" / "Device Name" / "Email Address"
+    // appear in many MDM exports. Require at least one vendor-specific header
+    // so Kandji/Addigy/ManageEngine fixtures are not misclassified as Intune/Jamf.
+    const headerSet = new Set((headers || []).map((header) => String(header || '').trim().toLowerCase()));
+    if (source === 'intune') {
+      // "Device ID" alone is common across MDMs; require an Entra/Intune-ish
+      // identity column so generic Device ID exports stay on the preset path.
+      const distinctive = [
+        'primary user upn',
+        'management name',
+        'primary user display name',
+        'primary user email address'
+      ];
+      if (!distinctive.some((header) => headerSet.has(header))) return '';
+    }
+    if (source === 'jamf') {
+      const distinctive = ['jamf pro computer id', 'total ram mb'];
+      if (!distinctive.some((header) => headerSet.has(header))) return '';
+    }
+    return source;
   } catch {
     return '';
   }
