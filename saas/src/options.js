@@ -25,7 +25,7 @@ export async function ensureOptionsSeeded(db, organizationId) {
     SELECT DISTINCT department AS label
     FROM people
     WHERE organization_id = ? AND department IS NOT NULL AND TRIM(department) <> ''
-    ORDER BY LOWER(department)
+    ORDER BY LOWER(label)
   `, [organizationId]);
 
   await db.transaction(async (tx) => {
