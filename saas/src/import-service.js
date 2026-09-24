@@ -9,10 +9,17 @@ import { shouldSkipImportedUser } from '../../src/import/excluded-users.js';
 import { emptyImportPolicy } from '../../src/import/import-policy.js';
 import { isZip, extractFirstCsvFromZip } from '../../src/import/zip-reader.js';
 import { resolveModel } from '../../src/import/model-resolver.js';
-import { asResolverCatalog, modelLabel } from './catalog.js';
+import { asResolverCatalog, modelLabel, resolveGenericModel } from './catalog.js';
+import { applyMapping, headerSignature, suggestMapping } from './import/column-mapper.js';
+import { canonicalFields, getPreset, listPresets } from './import/mdm-presets.js';
 
-export const IMPORT_SOURCES = ['auto', 'intune', 'jamf'];
-export const USER_IMPORT_SOURCES = ['auto', 'entra', 'intune_users'];
+const LEGACY_DEVICE_SOURCES = ['intune', 'jamf'];
+const LEGACY_USER_SOURCES = ['entra', 'intune_users'];
+const DEVICE_PRESET_KEYS = listPresets('devices').map((preset) => preset.key);
+const USER_PRESET_KEYS = listPresets('users').map((preset) => preset.key);
+
+export const IMPORT_SOURCES = ['auto', ...LEGACY_DEVICE_SOURCES, ...DEVICE_PRESET_KEYS, 'mapped'];
+export const USER_IMPORT_SOURCES = ['auto', ...LEGACY_USER_SOURCES, ...USER_PRESET_KEYS, 'mapped'];
 
 // A hosted tenant shares one event loop with every other tenant, so the SaaS
 // import is capped well below the shared parser defaults.
@@ -26,22 +33,105 @@ export function buildSaasImportPreview({
   existingAssets = [],
   existingPeople = [],
   catalog = { categories: [], brands: [], models: [] },
-  policy = emptyImportPolicy()
+  policy = emptyImportPolicy(),
+  mapping = null,
+  profiles = [],
+  profileId = ''
 }) {
-  // `source` arrives as a multipart form field. Unvalidated it reaches
-  // detectSource(), which returns it verbatim, and then a column constrained to
-  // 'intune' or 'jamf'.
   const requestedSource = clean(source) || 'auto';
-  if (!IMPORT_SOURCES.includes(requestedSource)) {
-    throw badRequest(`source must be one of ${IMPORT_SOURCES.join(', ')}`);
-  }
+  validateDeviceSource(requestedSource);
   const parsed = parseImportFile(buffer, fileName);
-  const detectedSource = detectSource(parsed.headers, requestedSource);
-  // Policy is per request. The shared modules no longer see a process-global
-  // exclusion list on this path, so two organizations can import at once.
-  const normalizedRows = detectedSource === 'intune'
-    ? mapIntuneRows(parsed.records, 'all', policy)
-    : mapJamfRows(parsed.records, 'all');
+  const signature = headerSignature(parsed.headers);
+  const providedMapping = normalizeMapping(mapping);
+
+  let detectedSource = '';
+  let profile = null;
+  let activeMapping = providedMapping;
+  let needsMapping = false;
+
+  if (LEGACY_DEVICE_SOURCES.includes(requestedSource)) {
+    detectedSource = requestedSource;
+  } else if (requestedSource === 'auto') {
+    detectedSource = tryDetectLegacyDeviceSource(parsed.headers) || '';
+  } else if (requestedSource.startsWith('profile:')) {
+    profile = profiles.find((item) => item.id === requestedSource.slice('profile:'.length));
+    if (!profile) throw badRequest('Import profile not found');
+    detectedSource = profile.presetKey || 'mapped';
+    activeMapping = Object.keys(providedMapping).length ? providedMapping : profile.mapping;
+  } else if (DEVICE_PRESET_KEYS.includes(requestedSource) || requestedSource === 'mapped') {
+    detectedSource = requestedSource === 'mapped' ? 'mapped' : requestedSource;
+  }
+
+  if (!detectedSource) {
+    if (profileId) {
+      profile = profiles.find((item) => item.id === profileId) || null;
+    }
+    if (!profile) {
+      profile = profiles.find((item) => item.headerSignature === signature) || null;
+    }
+    if (profile && !Object.keys(activeMapping).length) {
+      activeMapping = profile.mapping;
+      detectedSource = profile.presetKey || 'mapped';
+    }
+  }
+
+  if (!detectedSource && !Object.keys(activeMapping).length) {
+    const suggestion = suggestMapping(parsed.headers, { kind: 'devices' });
+    const certain = suggestion.presetKey
+      && !suggestion.uncertain
+      && suggestion.mapping?.serialNumber
+      && suggestion.score >= 3;
+    if (certain && requestedSource === 'auto') {
+      detectedSource = suggestion.presetKey;
+      activeMapping = suggestion.mapping;
+    } else if (DEVICE_PRESET_KEYS.includes(requestedSource) && requestedSource !== 'generic') {
+      const preset = getPreset(requestedSource);
+      activeMapping = buildMappingFromPresetHeaders(parsed.headers, preset);
+      if (!activeMapping.serialNumber) needsMapping = true;
+      detectedSource = requestedSource;
+    } else {
+      needsMapping = true;
+      return {
+        needsMapping: true,
+        kind: 'devices',
+        fileName,
+        headers: parsed.headers,
+        sampleRows: parsed.records.slice(0, 5),
+        suggestion,
+        canonicalFields: canonicalFields('devices'),
+        headerSignature: signature,
+        source: suggestion.presetKey || 'mapped'
+      };
+    }
+  }
+
+  if (!detectedSource) detectedSource = 'mapped';
+  if (Object.keys(activeMapping).length && !activeMapping.serialNumber && !LEGACY_DEVICE_SOURCES.includes(detectedSource)) {
+    needsMapping = true;
+  }
+  if (needsMapping) {
+    const suggestion = suggestMapping(parsed.headers, { kind: 'devices' });
+    return {
+      needsMapping: true,
+      kind: 'devices',
+      fileName,
+      headers: parsed.headers,
+      sampleRows: parsed.records.slice(0, 5),
+      suggestion: {
+        ...suggestion,
+        mapping: Object.keys(activeMapping).length ? activeMapping : suggestion.mapping
+      },
+      canonicalFields: canonicalFields('devices'),
+      headerSignature: signature,
+      source: detectedSource || suggestion.presetKey || 'mapped'
+    };
+  }
+
+  const normalizedRows = LEGACY_DEVICE_SOURCES.includes(detectedSource)
+    ? (detectedSource === 'intune'
+      ? mapIntuneRows(parsed.records, 'all', policy)
+      : mapJamfRows(parsed.records, 'all'))
+    : applyMapping(parsed.records, activeMapping, detectedSource);
 
   const resolverCatalog = asResolverCatalog(catalog);
   const assetsBySerial = new Map(
@@ -112,16 +202,18 @@ export function buildSaasImportPreview({
       || policy.modelOverrides?.[normalized.serialNumber]
       || policy.modelOverrides?.[normalized.externalId]
       || policy.modelOverrides?.[String(normalized.line)];
-    const resolution = resolveModel(resolverCatalog, {
-      ...normalized,
-      source: detectedSource
-    }, overrideModelId ? { [normalized.serialNumber]: overrideModelId } : {});
+    const resolution = resolveImportModel(
+      catalog,
+      resolverCatalog,
+      { ...normalized, source: detectedSource },
+      overrideModelId
+    );
     warnings.push(...(resolution.warnings || []));
     const needsReview = action !== 'skip' && !resolution.model;
     if (needsReview) action = 'needs_review';
 
     const resolvedLabel = resolution.model
-      ? modelLabel(resolution.model, resolverCatalog.brands)
+      ? modelLabel(resolution.model, resolverCatalog.brands || catalog.brands)
       : '';
 
     return {
@@ -138,18 +230,23 @@ export function buildSaasImportPreview({
       manufacturer: clean(normalized.manufacturer),
       category: clean(
         resolution.model?.deviceType
+          || resolution.category
           || (normalized.mtrRegion ? `MTR ${normalized.mtrRegion}` : '')
       ),
       brand: clean(
-        resolverCatalog.brands.find((brand) => brand.id === resolution.model?.brandId)?.name || ''
+        resolution.brand
+          || (resolverCatalog.brands || catalog.brands)
+            .find((brand) => brand.id === resolution.model?.brandId)?.name
+          || ''
       ),
+      location: clean(normalized.location),
       operatingSystem: [normalized.os, normalized.osVersion].filter(Boolean).join(' ').trim(),
       ramGb: gigabytes(normalized.ram),
       storageGb: gigabytes(normalized.storage),
       cpu: clean(normalized.cpu),
       imei: clean(normalized.imei),
       enrolledAt: clean(normalized.enrolledAt),
-      lastEnrolledAt: clean(normalized.lastEnrolledAt),
+      lastEnrolledAt: clean(normalized.lastEnrolledAt || normalized.lastSeen),
       notes: buildImportNotes(normalized),
       externalId: clean(normalized.externalId),
       person,
@@ -165,6 +262,10 @@ export function buildSaasImportPreview({
   return {
     source: detectedSource,
     fileName,
+    kind: 'devices',
+    headerSignature: signature,
+    mapping: LEGACY_DEVICE_SOURCES.includes(detectedSource) ? null : activeMapping,
+    profileId: profile?.id || profileId || '',
     summary: summarize(rows, parsed.records.length),
     rows
   };
@@ -181,17 +282,91 @@ export function buildSaasUserImportPreview({
   fileName,
   source = 'auto',
   existingPeople = [],
-  policy = emptyImportPolicy()
+  policy = emptyImportPolicy(),
+  mapping = null,
+  profiles = [],
+  profileId = ''
 }) {
   const requestedSource = clean(source) || 'auto';
-  if (!USER_IMPORT_SOURCES.includes(requestedSource)) {
-    throw badRequest(`source must be one of ${USER_IMPORT_SOURCES.join(', ')}`);
-  }
+  validateUserSource(requestedSource);
   const parsed = parseImportFile(buffer, fileName);
-  const detectedSource = detectUserSource(parsed.headers, requestedSource);
-  const normalizedRows = detectedSource === 'entra'
-    ? mapEntraUserRows(parsed.records)
-    : mapIntuneUserRows(parsed.records);
+  const signature = headerSignature(parsed.headers);
+  const providedMapping = normalizeMapping(mapping);
+
+  let detectedSource = '';
+  let profile = null;
+  let activeMapping = providedMapping;
+
+  if (LEGACY_USER_SOURCES.includes(requestedSource)) {
+    detectedSource = requestedSource;
+  } else if (requestedSource === 'auto') {
+    detectedSource = tryDetectLegacyUserSource(parsed.headers) || '';
+  } else if (requestedSource.startsWith('profile:')) {
+    profile = profiles.find((item) => item.id === requestedSource.slice('profile:'.length));
+    if (!profile) throw badRequest('Import profile not found');
+    detectedSource = profile.presetKey || 'mapped';
+    activeMapping = Object.keys(providedMapping).length ? providedMapping : profile.mapping;
+  } else if (USER_PRESET_KEYS.includes(requestedSource) || requestedSource === 'mapped') {
+    detectedSource = requestedSource === 'mapped' ? 'mapped' : requestedSource;
+  }
+
+  if (!detectedSource) {
+    if (profileId) profile = profiles.find((item) => item.id === profileId) || null;
+    if (!profile) profile = profiles.find((item) => item.headerSignature === signature) || null;
+    if (profile && !Object.keys(activeMapping).length) {
+      activeMapping = profile.mapping;
+      detectedSource = profile.presetKey || 'mapped';
+    }
+  }
+
+  if (!detectedSource && !Object.keys(activeMapping).length) {
+    const suggestion = suggestMapping(parsed.headers, { kind: 'users' });
+    const certain = suggestion.presetKey
+      && !suggestion.uncertain
+      && suggestion.mapping?.email
+      && suggestion.score >= 2;
+    if (certain && requestedSource === 'auto') {
+      detectedSource = suggestion.presetKey;
+      activeMapping = suggestion.mapping;
+    } else {
+      return {
+        needsMapping: true,
+        kind: 'users',
+        fileName,
+        headers: parsed.headers,
+        sampleRows: parsed.records.slice(0, 5),
+        suggestion,
+        canonicalFields: canonicalFields('users'),
+        headerSignature: signature,
+        source: suggestion.presetKey || 'mapped'
+      };
+    }
+  }
+
+  if (!detectedSource) detectedSource = 'mapped';
+  if (Object.keys(activeMapping).length && !activeMapping.email && !LEGACY_USER_SOURCES.includes(detectedSource)) {
+    const suggestion = suggestMapping(parsed.headers, { kind: 'users' });
+    return {
+      needsMapping: true,
+      kind: 'users',
+      fileName,
+      headers: parsed.headers,
+      sampleRows: parsed.records.slice(0, 5),
+      suggestion: {
+        ...suggestion,
+        mapping: Object.keys(activeMapping).length ? activeMapping : suggestion.mapping
+      },
+      canonicalFields: canonicalFields('users'),
+      headerSignature: signature,
+      source: detectedSource || suggestion.presetKey || 'mapped'
+    };
+  }
+
+  const normalizedRows = LEGACY_USER_SOURCES.includes(detectedSource)
+    ? (detectedSource === 'entra'
+      ? mapEntraUserRows(parsed.records)
+      : mapIntuneUserRows(parsed.records))
+    : applyMapping(parsed.records, activeMapping, detectedSource);
 
   const peopleByEmail = new Map();
   for (const person of existingPeople) {
@@ -247,9 +422,139 @@ export function buildSaasUserImportPreview({
     kind: 'users',
     source: detectedSource,
     fileName,
+    headerSignature: signature,
+    mapping: LEGACY_USER_SOURCES.includes(detectedSource) ? null : activeMapping,
+    profileId: profile?.id || profileId || '',
     summary: summarize(rows, parsed.records.length),
     rows
   };
+}
+
+function resolveImportModel(catalog, resolverCatalog, normalized, overrideModelId) {
+  if (overrideModelId) {
+    const forced = (catalog.models || []).find((model) => model.id === overrideModelId);
+    if (forced) {
+      const brand = (catalog.brands || []).find((item) => item.id === forced.brandId);
+      return {
+        model: forced,
+        match: 'override',
+        warnings: [],
+        brand: brand?.name || '',
+        category: ''
+      };
+    }
+  }
+
+  if (LEGACY_DEVICE_SOURCES.includes(normalized.source)) {
+    const resolution = resolveModel(resolverCatalog, normalized, {});
+    if (resolution.model) {
+      return {
+        ...resolution,
+        brand: (resolverCatalog.brands || []).find((brand) => brand.id === resolution.model.brandId)?.name || '',
+        category: resolution.model.deviceType || ''
+      };
+    }
+  }
+
+  const generic = resolveGenericModel(catalog, {
+    manufacturer: normalized.manufacturer,
+    model: normalized.model,
+    modelIdentifier: normalized.modelIdentifier
+  });
+  if (generic.model) {
+    const brand = (catalog.brands || []).find((item) => item.id === generic.model.brandId);
+    const category = (catalog.categories || []).find((item) => item.id === brand?.categoryId);
+    return {
+      model: generic.model,
+      match: generic.match,
+      warnings: generic.warnings || [],
+      brand: brand?.name || '',
+      category: category?.name || generic.model.deviceType || ''
+    };
+  }
+
+  if (LEGACY_DEVICE_SOURCES.includes(normalized.source)) {
+    return {
+      model: null,
+      match: 'none',
+      warnings: ['Model could not be resolved from Intune/Jamf or the tenant catalog.'],
+      brand: '',
+      category: ''
+    };
+  }
+
+  return {
+    model: null,
+    match: 'none',
+    warnings: generic.warnings?.length
+      ? generic.warnings
+      : ['Model could not be matched to the tenant catalog.'],
+    brand: '',
+    category: ''
+  };
+}
+
+function tryDetectLegacyDeviceSource(headers) {
+  try {
+    const source = detectSource(headers, 'auto');
+    return LEGACY_DEVICE_SOURCES.includes(source) ? source : '';
+  } catch {
+    return '';
+  }
+}
+
+function tryDetectLegacyUserSource(headers) {
+  try {
+    const source = detectUserSource(headers, 'auto');
+    return LEGACY_USER_SOURCES.includes(source) ? source : '';
+  } catch {
+    return '';
+  }
+}
+
+function validateDeviceSource(source) {
+  if (
+    IMPORT_SOURCES.includes(source)
+    || source.startsWith('profile:')
+  ) return;
+  throw badRequest(`source must be one of ${IMPORT_SOURCES.join(', ')} or profile:<id>`);
+}
+
+function validateUserSource(source) {
+  if (
+    USER_IMPORT_SOURCES.includes(source)
+    || source.startsWith('profile:')
+  ) return;
+  throw badRequest(`source must be one of ${USER_IMPORT_SOURCES.join(', ')} or profile:<id>`);
+}
+
+function buildMappingFromPresetHeaders(headers, preset) {
+  if (!preset) return {};
+  const suggestion = suggestMapping(headers, { kind: preset.kind });
+  if (suggestion.presetKey === preset.key) return suggestion.mapping;
+  const normalized = new Map((headers || []).map((header) => [String(header).trim().toLowerCase(), header]));
+  const mapping = {};
+  for (const [field, aliases] of Object.entries(preset.fields || {})) {
+    for (const alias of aliases) {
+      const actual = normalized.get(String(alias).trim().toLowerCase());
+      if (actual) {
+        mapping[field] = actual;
+        break;
+      }
+    }
+  }
+  return mapping;
+}
+
+function normalizeMapping(mapping) {
+  if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) return {};
+  const result = {};
+  for (const [field, header] of Object.entries(mapping)) {
+    const keyName = clean(field);
+    const value = clean(header);
+    if (keyName && value) result[keyName] = value;
+  }
+  return result;
 }
 
 function parseImportFile(buffer, fileName) {

@@ -1,4 +1,5 @@
 import { isWarrantyExpiringWithinDays } from '../../src/utils/asset-model-label.js';
+import { countsAs } from './options.js';
 
 export const reportTypes = [
   { id: 'in_stock', label: 'Devices in stock' },
@@ -7,13 +8,14 @@ export const reportTypes = [
   { id: 'warranty_90', label: 'Warranty expiring in 90 days' },
   { id: 'people_without_device', label: 'People without a device' },
   { id: 'missing_from_mdm', label: 'Missing from the last MDM import' },
-  { id: 'mtr_ro', label: 'Teams Rooms RO' },
-  { id: 'mtr_bg', label: 'Teams Rooms BG' }
+  { id: 'by_category', label: 'Devices by category' }
 ];
 
-export function buildReportRows(reportId, { assets = [], people = [] } = {}) {
+export function buildReportRows(reportId, { assets = [], people = [], statusOptions = [] } = {}) {
   if (reportId === 'in_stock') {
-    return assets.filter((asset) => asset.status === 'in_stock').map(assetRow);
+    return assets
+      .filter((asset) => countsAs(asset.status, statusOptions) === 'in_stock')
+      .map(assetRow);
   }
   if (reportId === 'assigned_by_department') {
     return assets
@@ -54,12 +56,17 @@ export function buildReportRows(reportId, { assets = [], people = [] } = {}) {
         missingDetectedAt: asset.importMeta?.missingDetectedAt || ''
       }));
   }
-  if (reportId === 'mtr_ro' || reportId === 'mtr_bg') {
-    // The offline app keys these off catalogue categories named "MTR RO"/"MTR BG".
-    // SaaS assets may carry the category as free text or only in the device name,
-    // so both are matched.
-    const region = reportId === 'mtr_ro' ? 'ro' : 'bg';
-    return assets.filter((asset) => mtrRegionOf(asset) === region).map(assetRow);
+  if (reportId === 'by_category' || reportId === 'mtr_ro' || reportId === 'mtr_bg') {
+    // mtr_ro / mtr_bg remain as aliases for older bookmarks; they now list
+    // every device grouped by its category (Meeting room, Laptop, …).
+    return assets
+      .slice()
+      .sort((a, b) => String(a.category || '').localeCompare(String(b.category || ''))
+        || String(a.assetTag || '').localeCompare(String(b.assetTag || '')))
+      .map((asset) => ({
+        category: asset.category || 'Uncategorized',
+        ...assetRow(asset)
+      }));
   }
   const error = new Error('Unknown report');
   error.status = 404;
@@ -74,6 +81,7 @@ export function assetsCsv(assets) {
     brand: asset.brand || '',
     model: asset.modelName || '',
     status: asset.status || '',
+    location: asset.locationKey || '',
     person: personName(asset),
     email: asset.personEmail || '',
     department: asset.personDepartment || '',
@@ -110,15 +118,6 @@ function assetRow(asset) {
     email: asset.personEmail || '',
     warrantyEndsOn: asset.warrantyEndsOn || ''
   };
-}
-
-function mtrRegionOf(asset) {
-  const haystack = [asset.category, asset.modelName, asset.assetTag]
-    .map((value) => String(value ?? '').toLowerCase().replace(/[\s_-]+/g, ''))
-    .join(' ');
-  if (haystack.includes('mtrro') || haystack.includes('roroom')) return 'ro';
-  if (haystack.includes('mtrbg') || haystack.includes('bgroom')) return 'bg';
-  return '';
 }
 
 function personName(asset) {

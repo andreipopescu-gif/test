@@ -101,6 +101,8 @@ function mapRecord(record, mapping, sourceKey) {
     imei: field(record, mapping, 'imei'),
     enrolledAt: normalizeImportDate(field(record, mapping, 'enrolledAt')),
     lastEnrolledAt: normalizeImportDate(field(record, mapping, 'lastEnrolledAt')),
+    lastSeen: normalizeImportDate(field(record, mapping, 'lastSeenAt') || field(record, mapping, 'lastEnrolledAt')),
+    location: field(record, mapping, 'location'),
     person: email || personName
       ? {
           email,

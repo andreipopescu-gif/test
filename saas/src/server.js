@@ -15,7 +15,42 @@ import {
   notFound
 } from './http.js';
 import { buildSaasImportPreview, buildSaasUserImportPreview } from './import-service.js';
-import { createCatalogModel, listCatalog } from './catalog.js';
+import {
+  createBrand,
+  createCatalogModel,
+  createCategory,
+  deleteBrand,
+  deleteCategory,
+  deleteModel,
+  listCatalog,
+  resetDefaults,
+  updateBrand,
+  updateCategory,
+  updateModel
+} from './catalog.js';
+import {
+  countsAs,
+  createCustomField,
+  createOption,
+  deleteCustomField,
+  deleteOption,
+  ensureDepartmentOption,
+  listAllOptions,
+  listCustomFields,
+  listOptions,
+  updateCustomField,
+  updateOption,
+  validateCustomFields,
+  validateLocation,
+  validateStatus
+} from './options.js';
+import {
+  createImportProfile,
+  deleteImportProfile,
+  listImportProfiles,
+  updateImportProfile
+} from './import-profiles.js';
+import { listPresets } from './import/mdm-presets.js';
 import { assetsCsv, buildReportRows, reportTypes, rowsToCsv } from './reports.js';
 import { createImportPolicy } from '../../src/import/import-policy.js';
 import { isWarrantyExpiringWithinDays } from '../../src/utils/asset-model-label.js';
@@ -200,17 +235,191 @@ async function handleApi(req, res, url) {
     return sendJson(res, model, 201);
   }
 
+  if (path === '/api/catalog/categories' && method === 'POST') {
+    requireRole(session, ['admin']);
+    const category = await createCategory(db, session.organizationId, await readJson(req));
+    await addAudit(session, 'catalog.category_create', 'catalog_category', category.id, { name: category.name });
+    return sendJson(res, category, 201);
+  }
+
+  if (method === 'PATCH' && path.startsWith('/api/catalog/categories/')) {
+    requireRole(session, ['admin']);
+    const id = path.split('/')[4];
+    const category = await updateCategory(db, session.organizationId, id, await readJson(req));
+    await addAudit(session, 'catalog.category_update', 'catalog_category', id);
+    return sendJson(res, category);
+  }
+
+  if (method === 'DELETE' && path.startsWith('/api/catalog/categories/')) {
+    requireRole(session, ['admin']);
+    const id = path.split('/')[4];
+    const result = await deleteCategory(db, session.organizationId, id);
+    await addAudit(session, 'catalog.category_delete', 'catalog_category', id, result);
+    return sendJson(res, result);
+  }
+
+  if (path === '/api/catalog/brands' && method === 'POST') {
+    requireRole(session, ['admin']);
+    const brand = await createBrand(db, session.organizationId, await readJson(req));
+    await addAudit(session, 'catalog.brand_create', 'catalog_brand', brand.id, { name: brand.name });
+    return sendJson(res, brand, 201);
+  }
+
+  if (method === 'PATCH' && path.startsWith('/api/catalog/brands/')) {
+    requireRole(session, ['admin']);
+    const id = path.split('/')[4];
+    const brand = await updateBrand(db, session.organizationId, id, await readJson(req));
+    await addAudit(session, 'catalog.brand_update', 'catalog_brand', id);
+    return sendJson(res, brand);
+  }
+
+  if (method === 'DELETE' && path.startsWith('/api/catalog/brands/')) {
+    requireRole(session, ['admin']);
+    const id = path.split('/')[4];
+    const result = await deleteBrand(db, session.organizationId, id);
+    await addAudit(session, 'catalog.brand_delete', 'catalog_brand', id, result);
+    return sendJson(res, result);
+  }
+
+  if (method === 'PATCH' && path.startsWith('/api/catalog/models/')) {
+    requireRole(session, ['admin']);
+    const id = path.split('/')[4];
+    const model = await updateModel(db, session.organizationId, id, await readJson(req));
+    await addAudit(session, 'catalog.model_update', 'catalog_model', id);
+    return sendJson(res, model);
+  }
+
+  if (method === 'DELETE' && path.startsWith('/api/catalog/models/')) {
+    requireRole(session, ['admin']);
+    const id = path.split('/')[4];
+    const result = await deleteModel(db, session.organizationId, id);
+    await addAudit(session, 'catalog.model_delete', 'catalog_model', id, result);
+    return sendJson(res, result);
+  }
+
+  if (path === '/api/catalog/reset-defaults' && method === 'POST') {
+    requireRole(session, ['admin']);
+    const result = await resetDefaults(db, session.organizationId);
+    await addAudit(session, 'catalog.reset_defaults', 'catalog', session.organizationId, result.added);
+    return sendJson(res, result);
+  }
+
+  if (path === '/api/options' && method === 'GET') {
+    return sendJson(res, await listAllOptions(db, session.organizationId));
+  }
+
+  if (method === 'POST' && path.startsWith('/api/options/')) {
+    requireRole(session, ['admin']);
+    const kind = path.split('/')[3];
+    const option = await createOption(db, session.organizationId, kind, await readJson(req));
+    await addAudit(session, 'options.create', 'org_option', option.id, { kind, key: option.key });
+    return sendJson(res, option, 201);
+  }
+
+  if (method === 'PATCH' && path.startsWith('/api/options/')) {
+    requireRole(session, ['admin']);
+    const parts = path.split('/');
+    const kind = parts[3];
+    const id = parts[4];
+    const option = await updateOption(db, session.organizationId, id, await readJson(req));
+    await addAudit(session, 'options.update', 'org_option', id, { kind });
+    return sendJson(res, option);
+  }
+
+  if (method === 'DELETE' && path.startsWith('/api/options/')) {
+    requireRole(session, ['admin']);
+    const parts = path.split('/');
+    const kind = parts[3];
+    const id = parts[4];
+    const result = await deleteOption(db, session.organizationId, id);
+    await addAudit(session, 'options.delete', 'org_option', id, { kind, ...result });
+    return sendJson(res, result);
+  }
+
+  if (path === '/api/custom-fields' && method === 'GET') {
+    const entity = clean(url.searchParams.get('entity') || 'asset') || 'asset';
+    return sendJson(res, await listCustomFields(db, session.organizationId, entity));
+  }
+
+  if (path === '/api/custom-fields' && method === 'POST') {
+    requireRole(session, ['admin']);
+    const body = await readJson(req);
+    const field = await createCustomField(
+      db,
+      session.organizationId,
+      clean(body.entity) || 'asset',
+      body
+    );
+    await addAudit(session, 'custom_fields.create', 'custom_field', field.id, {
+      entity: field.entity,
+      key: field.key
+    });
+    return sendJson(res, field, 201);
+  }
+
+  if (method === 'PATCH' && path.startsWith('/api/custom-fields/')) {
+    requireRole(session, ['admin']);
+    const id = path.split('/')[3];
+    const field = await updateCustomField(db, session.organizationId, id, await readJson(req));
+    await addAudit(session, 'custom_fields.update', 'custom_field', id);
+    return sendJson(res, field);
+  }
+
+  if (method === 'DELETE' && path.startsWith('/api/custom-fields/')) {
+    requireRole(session, ['admin']);
+    const id = path.split('/')[3];
+    const result = await deleteCustomField(db, session.organizationId, id);
+    await addAudit(session, 'custom_fields.delete', 'custom_field', id, result);
+    return sendJson(res, result);
+  }
+
+  if (path === '/api/import/presets' && method === 'GET') {
+    const kind = clean(url.searchParams.get('kind'));
+    return sendJson(res, listPresets(kind || undefined));
+  }
+
+  if (path === '/api/import/profiles' && method === 'GET') {
+    return sendJson(res, await listImportProfiles(db, session.organizationId));
+  }
+
+  if (path === '/api/import/profiles' && method === 'POST') {
+    requireRole(session, ['admin', 'it']);
+    const profile = await createImportProfile(db, session.organizationId, await readJson(req));
+    await addAudit(session, 'import.profile_create', 'import_profile', profile.id, {
+      name: profile.name,
+      presetKey: profile.presetKey
+    });
+    return sendJson(res, profile, 201);
+  }
+
+  if (method === 'PATCH' && path.startsWith('/api/import/profiles/')) {
+    requireRole(session, ['admin', 'it']);
+    const id = path.split('/')[4];
+    const profile = await updateImportProfile(db, session.organizationId, id, await readJson(req));
+    await addAudit(session, 'import.profile_update', 'import_profile', id);
+    return sendJson(res, profile);
+  }
+
+  if (method === 'DELETE' && path.startsWith('/api/import/profiles/')) {
+    requireRole(session, ['admin', 'it']);
+    const id = path.split('/')[4];
+    const result = await deleteImportProfile(db, session.organizationId, id);
+    await addAudit(session, 'import.profile_delete', 'import_profile', id, result);
+    return sendJson(res, result);
+  }
+
   if (method === 'GET' && path === '/api/reports') {
     return sendJson(res, reportTypes);
   }
 
   if (method === 'GET' && path.startsWith('/api/reports/')) {
     const reportId = path.split('/')[3];
-    const [assets, people] = await Promise.all([
+    const [assets, people, statusOptions] = await Promise.all([
       listAssets(session.organizationId),
-      listPeople(session.organizationId)
+      listPeople(session.organizationId),
+      listOptions(db, session.organizationId, 'status')
     ]);
-    const rows = buildReportRows(reportId, { assets, people });
+    const rows = buildReportRows(reportId, { assets, people, statusOptions });
     return sendCsv(res, rowsToCsv(rows), `report-${reportId}.csv`);
   }
 
@@ -785,6 +994,7 @@ async function listPeople(organizationId) {
   return (await db.all(`
     SELECT id, first_name AS "firstName", last_name AS "lastName", email, department,
            role_title AS role, status, external_ids_json AS "externalIdsJson",
+           custom_json AS "customJson",
            created_at AS "createdAt", updated_at AS "updatedAt"
     FROM people
     WHERE organization_id = ?
@@ -792,7 +1002,9 @@ async function listPeople(organizationId) {
   `, [organizationId])).map((row) => ({
     ...row,
     externalIds: normalizePersonExternalIds(parseJson(row.externalIdsJson, {})),
-    externalIdsJson: undefined
+    custom: parseJson(row.customJson, {}),
+    externalIdsJson: undefined,
+    customJson: undefined
   }));
 }
 
@@ -826,23 +1038,26 @@ async function createPerson(organizationId, input) {
   const firstName = clean(input.firstName);
   const lastName = clean(input.lastName);
   if (!firstName || !lastName) throw badRequest('firstName and lastName are required');
+  const department = await resolveDepartmentValue(organizationId, input.department);
+  const custom = await resolveCustomValues(organizationId, 'person', input.custom);
   const now = new Date().toISOString();
   const id = randomUUID();
   await db.run(`
     INSERT INTO people (
       id, organization_id, first_name, last_name, email, department, role_title, status,
-      external_ids_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      external_ids_json, custom_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
     id,
     organizationId,
     firstName,
     lastName,
     clean(input.email).toLowerCase(),
-    clean(input.department),
+    department,
     clean(input.role),
     input.status === 'inactive' ? 'inactive' : 'active',
     JSON.stringify(normalizePersonExternalIds(input.externalIds)),
+    JSON.stringify(custom),
     now,
     now
   ]);
@@ -869,20 +1084,27 @@ async function updatePerson(organizationId, id, input) {
         ...parseJson(existing.external_ids_json, {}),
         ...input.externalIds
       });
+  const department = input.department === undefined
+    ? existing.department
+    : await resolveDepartmentValue(organizationId, input.department);
+  const custom = input.custom === undefined
+    ? parseJson(existing.custom_json, {})
+    : await resolveCustomValues(organizationId, 'person', input.custom);
 
   await db.run(`
     UPDATE people
     SET first_name = ?, last_name = ?, email = ?, department = ?, role_title = ?,
-        status = ?, external_ids_json = ?, updated_at = ?
+        status = ?, external_ids_json = ?, custom_json = ?, updated_at = ?
     WHERE id = ? AND organization_id = ?
   `, [
     firstName,
     lastName,
     pick(input.email, existing.email).toLowerCase(),
-    pick(input.department, existing.department),
+    department,
     pick(input.role, existing.role_title),
     status,
     JSON.stringify(externalIds),
+    JSON.stringify(custom),
     new Date().toISOString(),
     id,
     organizationId
@@ -963,9 +1185,10 @@ async function mergePeople(organizationId, input) {
 }
 
 async function getDashboard(organizationId) {
-  const [assets, people] = await Promise.all([
+  const [assets, people, statusOptions] = await Promise.all([
     listAssets(organizationId),
-    listPeople(organizationId)
+    listPeople(organizationId),
+    listOptions(db, organizationId, 'status')
   ]);
 
   const recentAssignments = (await db.all(`
@@ -1009,7 +1232,7 @@ async function getDashboard(organizationId) {
       missingFromMdm: assets.filter((asset) => asset.importMeta?.missingFromLastImport).length
     },
     assets: {
-      byStatus: countBy(assets, (asset) => asset.status || 'unknown'),
+      byStatus: countBy(assets, (asset) => countsAs(asset.status, statusOptions)),
       byCategory: countBy(assets, (asset) => asset.category || 'Uncategorized'),
       byModel: countBy(assets, (asset) => asset.modelName || 'Unknown')
     },
@@ -1056,6 +1279,7 @@ const assetColumns = `
   a.cpu, a.imei, a.operating_system AS "operatingSystem", a.warranty_ends_on AS "warrantyEndsOn",
   a.purchased_on AS "purchasedOn", a.vendor, a.notes, a.enrolled_at AS "enrolledAt",
   a.last_enrolled_at AS "lastEnrolledAt", a.status, a.person_id AS "personId",
+  a.location_key AS "locationKey", a.custom_json AS "customJson",
   a.external_ids_json AS "externalIdsJson", a.import_meta_json AS "importMetaJson",
   a.created_at AS "createdAt", a.updated_at AS "updatedAt",
   p.first_name AS "personFirstName", p.last_name AS "personLastName",
@@ -1078,8 +1302,10 @@ function presentAsset(row) {
     ...row,
     externalIds: parseJson(row.externalIdsJson, {}),
     importMeta: parseJson(row.importMetaJson, {}),
+    custom: parseJson(row.customJson, {}),
     externalIdsJson: undefined,
-    importMetaJson: undefined
+    importMetaJson: undefined,
+    customJson: undefined
   };
 }
 
@@ -1151,13 +1377,15 @@ const assetRichFields = [
   ['vendor', 'vendor', clean],
   ['notes', 'notes', clean],
   ['enrolled_at', 'enrolledAt', clean],
-  ['last_enrolled_at', 'lastEnrolledAt', clean]
+  ['last_enrolled_at', 'lastEnrolledAt', clean],
+  ['location_key', 'locationKey', clean]
 ];
 
-function richAssetValues(input, existing = {}) {
-  return assetRichFields.map(([column, field, normalize]) =>
-    input[field] === undefined ? (existing[column] ?? null) : (normalize(input[field]) || null)
-  );
+function richAssetValues(input, existing = {}, extras = {}) {
+  return assetRichFields.map(([column, field, normalize]) => {
+    if (extras[field] !== undefined) return extras[field];
+    return input[field] === undefined ? (existing[column] ?? null) : (normalize(input[field]) || null);
+  });
 }
 
 function numberOrNull(value) {
@@ -1188,26 +1416,30 @@ async function createAsset(organizationId, input) {
     if (!person) throw badRequest('Person does not belong to this organization');
   }
   await requireOwnModel(organizationId, clean(input.modelId));
+  const status = personId ? 'assigned' : await resolveAssetStatus(organizationId, input.status);
+  const locationKey = await resolveLocationValue(organizationId, input.locationKey);
+  const custom = await resolveCustomValues(organizationId, 'asset', input.custom);
   try {
     await db.transaction(async (tx) => {
       await tx.run(`
         INSERT INTO assets (
           id, organization_id, asset_tag, serial_number, model_name, status, person_id,
-          external_ids_json, created_at, updated_at,
+          external_ids_json, custom_json, created_at, updated_at,
           ${assetRichFields.map(([column]) => column).join(', ')}
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${assetRichFields.map(() => '?').join(', ')})
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${assetRichFields.map(() => '?').join(', ')})
       `, [
         id,
         organizationId,
         assetTag,
         serialNumber,
         clean(input.modelName),
-        personId ? 'assigned' : normalizeStatus(input.status),
+        status,
         personId,
         JSON.stringify(normalizeAssetExternalIds(input.externalIds)),
+        JSON.stringify(custom),
         now,
         now,
-        ...richAssetValues(input)
+        ...richAssetValues(input, {}, { locationKey })
       ]);
       if (personId) {
         await openAssignment(tx, organizationId, id, personId, now, 'manual');
@@ -1249,13 +1481,19 @@ async function updateAsset(organizationId, id, input) {
   // stock unless the caller asked for another status, such as service.
   let status;
   if (personId) status = 'assigned';
-  else if (input.status !== undefined) status = normalizeStatus(input.status);
+  else if (input.status !== undefined) status = await resolveAssetStatus(organizationId, input.status);
   else status = existing.person_id ? 'in_stock' : existing.status;
 
   if (input.modelId !== undefined) await requireOwnModel(organizationId, clean(input.modelId));
   const externalIds = input.externalIds === undefined
     ? parseJson(existing.external_ids_json, {})
     : { ...parseJson(existing.external_ids_json, {}), ...normalizeAssetExternalIds(input.externalIds) };
+  const locationKey = input.locationKey === undefined
+    ? existing.location_key
+    : await resolveLocationValue(organizationId, input.locationKey);
+  const custom = input.custom === undefined
+    ? parseJson(existing.custom_json, {})
+    : await resolveCustomValues(organizationId, 'asset', input.custom);
 
   const now = new Date().toISOString();
   try {
@@ -1263,7 +1501,7 @@ async function updateAsset(organizationId, id, input) {
       await tx.run(`
         UPDATE assets
         SET asset_tag = ?, serial_number = ?, model_name = ?, status = ?, person_id = ?,
-            external_ids_json = ?, updated_at = ?,
+            external_ids_json = ?, custom_json = ?, updated_at = ?,
             ${assetRichFields.map(([column]) => `${column} = ?`).join(', ')}
         WHERE id = ? AND organization_id = ?
       `, [
@@ -1273,8 +1511,9 @@ async function updateAsset(organizationId, id, input) {
         status,
         personId,
         JSON.stringify(externalIds),
+        JSON.stringify(custom),
         now,
-        ...richAssetValues(input, existing),
+        ...richAssetValues(input, existing, { locationKey }),
         id,
         organizationId
       ]);
@@ -1306,12 +1545,14 @@ async function deleteAsset(organizationId, id) {
 }
 
 async function createImportPreview(session, upload) {
-  const [existingAssets, existingPeople, policy, catalog] = await Promise.all([
+  const [existingAssets, existingPeople, policy, catalog, profiles] = await Promise.all([
     listAssets(session.organizationId),
     listPeople(session.organizationId),
     loadImportPolicy(session.organizationId),
-    listCatalog(db, session.organizationId)
+    listCatalog(db, session.organizationId),
+    listImportProfiles(db, session.organizationId)
   ]);
+  const mapping = parseOptionalJsonField(upload.fields.mapping);
   const preview = buildSaasImportPreview({
     buffer: upload.file.buffer,
     fileName: upload.file.originalName,
@@ -1319,8 +1560,33 @@ async function createImportPreview(session, upload) {
     existingAssets,
     existingPeople,
     catalog,
-    policy
+    policy,
+    mapping,
+    profiles,
+    profileId: clean(upload.fields.profileId)
   });
+
+  if (preview.needsMapping) {
+    return preview;
+  }
+
+  const saveAsProfile = clean(upload.fields.saveAsProfile);
+  let profileId = preview.profileId || '';
+  if (saveAsProfile && preview.mapping) {
+    const profile = await createImportProfile(db, session.organizationId, {
+      name: saveAsProfile,
+      presetKey: preview.source,
+      headerSignature: preview.headerSignature || clean(upload.fields.headerSignature),
+      mapping: preview.mapping,
+      headers: []
+    });
+    profileId = profile.id;
+    await addAudit(session, 'import.profile_create', 'import_profile', profile.id, {
+      name: profile.name,
+      fromPreview: true
+    });
+  }
+
   const batchId = randomUUID();
   const now = new Date().toISOString();
   const policySnapshot = {
@@ -1340,8 +1606,8 @@ async function createImportPreview(session, upload) {
   await db.transaction(async (tx) => {
     await tx.run(`
       INSERT INTO import_batches (
-        id, organization_id, user_id, kind, source, file_name, status, summary_json, policy_json, created_at
-      ) VALUES (?, ?, ?, 'devices', ?, ?, 'preview', ?, ?, ?)
+        id, organization_id, user_id, kind, source, file_name, status, summary_json, policy_json, profile_id, created_at
+      ) VALUES (?, ?, ?, 'devices', ?, ?, 'preview', ?, ?, ?, ?)
     `, [
       batchId,
       session.organizationId,
@@ -1350,6 +1616,7 @@ async function createImportPreview(session, upload) {
       preview.fileName,
       JSON.stringify(preview.summary),
       JSON.stringify(policySnapshot),
+      profileId || null,
       now
     ]);
 
@@ -1380,7 +1647,7 @@ async function createImportPreview(session, upload) {
     fileName: preview.fileName,
     summary: preview.summary
   });
-  return { ...preview, batchId };
+  return { ...preview, batchId, profileId };
 }
 
 async function applyImportBatch(session, input) {
@@ -1402,9 +1669,49 @@ async function applyImportBatch(session, input) {
   const includeIds = Array.isArray(input.includeRowIds)
     ? new Set(input.includeRowIds.map(clean))
     : null;
-  const selected = rows.filter((row) =>
-    !['skip', 'needs_review'].includes(row.action) && (!includeIds || includeIds.has(row.id))
-  );
+  const modelOverrides = input.modelOverrides && typeof input.modelOverrides === 'object'
+    ? input.modelOverrides
+    : {};
+  const selected = rows.filter((row) => {
+    if (row.action === 'skip') return false;
+    if (!includeIds || includeIds.has(row.id)) {
+      if (row.action === 'needs_review') {
+        const data = parseJson(row.dataJson, {});
+        const override = clean(modelOverrides[data.rowKey] || modelOverrides[row.id] || '');
+        return Boolean(override);
+      }
+      return true;
+    }
+    return false;
+  });
+  const parsedRows = selected.map((stored) => {
+    const row = JSON.parse(stored.dataJson);
+    const overrideModelId = clean(modelOverrides[row.rowKey] || modelOverrides[stored.id] || '');
+    if (overrideModelId) {
+      row.modelId = overrideModelId;
+      if (row.action === 'needs_review') {
+        row.action = row.matchedAssetId ? 'update' : 'create';
+      }
+    }
+    return { stored, row, overrideModelId };
+  });
+
+  for (const { row } of parsedRows) {
+    if (clean(row.person?.department)) {
+      await ensureDepartmentOption(db, session.organizationId, row.person.department);
+    }
+    if (clean(row.location)) {
+      const locations = await listOptions(db, session.organizationId, 'location');
+      const match = locations.find((item) =>
+        item.key === clean(row.location)
+        || item.label.toLowerCase() === clean(row.location).toLowerCase()
+      );
+      if (!match) {
+        await createOption(db, session.organizationId, 'location', { label: clean(row.location) });
+      }
+    }
+  }
+
   const now = new Date().toISOString();
   let created = 0;
   let updated = 0;
@@ -1414,8 +1721,14 @@ async function applyImportBatch(session, input) {
   const touchedAssetIds = new Set();
 
   await db.transaction(async (tx) => {
-    for (const stored of selected) {
-      const row = JSON.parse(stored.dataJson);
+    for (const { stored, row, overrideModelId } of parsedRows) {
+      if (overrideModelId) {
+        const model = await tx.get(
+          'SELECT id, name FROM catalog_models WHERE id = ? AND organization_id = ?',
+          [overrideModelId, session.organizationId]
+        );
+        if (model) row.modelName = model.name;
+      }
       let personId = null;
       const personEmail = clean(row.person?.email).toLowerCase();
       if (personEmail) {
@@ -1574,7 +1887,8 @@ const importedAssetFields = [
   ['imei', 'imei'],
   ['enrolled_at', 'enrolledAt'],
   ['last_enrolled_at', 'lastEnrolledAt'],
-  ['notes', 'notes']
+  ['notes', 'notes'],
+  ['location_key', 'location']
 ];
 
 function importedAssetValues(row) {
@@ -1619,25 +1933,50 @@ async function markMissingFromImport(tx, organizationId, source, touchedAssetIds
 }
 
 async function createUserImportPreview(session, upload) {
-  const [existingPeople, policy] = await Promise.all([
+  const [existingPeople, policy, profiles] = await Promise.all([
     listPeople(session.organizationId),
-    loadImportPolicy(session.organizationId)
+    loadImportPolicy(session.organizationId),
+    listImportProfiles(db, session.organizationId)
   ]);
+  const mapping = parseOptionalJsonField(upload.fields.mapping);
   const preview = buildSaasUserImportPreview({
     buffer: upload.file.buffer,
     fileName: upload.file.originalName,
     source: upload.fields.source || 'auto',
     existingPeople,
-    policy
+    policy,
+    mapping,
+    profiles,
+    profileId: clean(upload.fields.profileId)
   });
+
+  if (preview.needsMapping) {
+    return preview;
+  }
+
+  const saveAsProfile = clean(upload.fields.saveAsProfile);
+  let profileId = preview.profileId || '';
+  if (saveAsProfile && preview.mapping) {
+    const profile = await createImportProfile(db, session.organizationId, {
+      name: saveAsProfile,
+      presetKey: preview.source,
+      headerSignature: preview.headerSignature || clean(upload.fields.headerSignature),
+      mapping: preview.mapping
+    });
+    profileId = profile.id;
+    await addAudit(session, 'import.profile_create', 'import_profile', profile.id, {
+      name: profile.name,
+      fromPreview: true
+    });
+  }
 
   const batchId = randomUUID();
   const now = new Date().toISOString();
   await db.transaction(async (tx) => {
     await tx.run(`
       INSERT INTO import_batches (
-        id, organization_id, user_id, kind, source, file_name, status, summary_json, policy_json, created_at
-      ) VALUES (?, ?, ?, 'users', ?, ?, 'preview', ?, '{}', ?)
+        id, organization_id, user_id, kind, source, file_name, status, summary_json, policy_json, profile_id, created_at
+      ) VALUES (?, ?, ?, 'users', ?, ?, 'preview', ?, '{}', ?, ?)
     `, [
       batchId,
       session.organizationId,
@@ -1645,6 +1984,7 @@ async function createUserImportPreview(session, upload) {
       preview.source,
       preview.fileName,
       JSON.stringify(preview.summary),
+      profileId || null,
       now
     ]);
     const storedRows = [];
@@ -1674,7 +2014,7 @@ async function createUserImportPreview(session, upload) {
     fileName: preview.fileName,
     summary: preview.summary
   });
-  return { ...preview, batchId };
+  return { ...preview, batchId, profileId };
 }
 
 async function applyUserImportBatch(session, input) {
@@ -2030,9 +2370,44 @@ async function uniqueSlug(base) {
   return slug;
 }
 
-function normalizeStatus(status) {
-  const value = clean(status);
-  return ['in_stock', 'assigned', 'deployed', 'service', 'retired'].includes(value) ? value : 'in_stock';
+async function resolveAssetStatus(organizationId, status) {
+  const statuses = await listOptions(db, organizationId, 'status');
+  const validation = validateStatus(status || 'in_stock', statuses);
+  if (!validation.valid) throw badRequest(validation.reason || 'Unknown status');
+  return validation.key;
+}
+
+async function resolveLocationValue(organizationId, locationKey) {
+  const key = clean(locationKey);
+  if (!key) return '';
+  const locations = await listOptions(db, organizationId, 'location');
+  const validation = validateLocation(key, locations);
+  if (!validation.valid) throw badRequest(validation.reason || 'Unknown location');
+  return validation.key;
+}
+
+async function resolveDepartmentValue(organizationId, department) {
+  const label = clean(department);
+  if (!label) return '';
+  const created = await ensureDepartmentOption(db, organizationId, label);
+  return created?.label || label;
+}
+
+async function resolveCustomValues(organizationId, entity, custom) {
+  const fields = await listCustomFields(db, organizationId, entity);
+  const validation = validateCustomFields(custom || {}, fields);
+  if (!validation.valid) throw badRequest(validation.errors.join('; '));
+  return validation.values;
+}
+
+function parseOptionalJsonField(raw) {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(String(raw));
+  } catch {
+    throw badRequest('mapping must be valid JSON');
+  }
 }
 
 function isUniqueViolation(error) {

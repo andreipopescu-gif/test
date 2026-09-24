@@ -89,8 +89,11 @@ test('options seed defaults and department auto-create', async () => {
     await ensureOptionsSeeded(db, orgId);
     const statuses = await listOptions(db, orgId, 'status');
     assert.equal(statuses.length, DEFAULT_STATUSES.length);
-    assert.equal(countsAs('in_stock', statuses), 'inventory');
+    assert.equal(countsAs('in_stock', statuses), 'in_stock');
     assert.equal(countsAs('assigned', statuses), 'assigned');
+    assert.equal(countsAs('deployed', statuses), 'other');
+    assert.equal(countsAs('service', statuses), 'other');
+    assert.equal(countsAs('retired', statuses), 'retired');
 
     const created = await ensureDepartmentOption(db, orgId, 'Engineering');
     assert.equal(created.label, 'Engineering');

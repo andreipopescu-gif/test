@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
 export const DEFAULT_STATUSES = [
-  { key: 'in_stock', label: 'In stock', sortOrder: 0, meta: { countsAs: 'inventory' } },
+  { key: 'in_stock', label: 'In stock', sortOrder: 0, meta: { countsAs: 'in_stock' } },
   { key: 'assigned', label: 'Assigned', sortOrder: 1, meta: { countsAs: 'assigned' } },
-  { key: 'deployed', label: 'Deployed (MTR)', sortOrder: 2, meta: { countsAs: 'deployed' } },
-  { key: 'service', label: 'In service', sortOrder: 3, meta: { countsAs: 'service' } },
+  { key: 'deployed', label: 'Deployed (MTR)', sortOrder: 2, meta: { countsAs: 'other' } },
+  { key: 'service', label: 'In service', sortOrder: 3, meta: { countsAs: 'other' } },
   { key: 'retired', label: 'Retired', sortOrder: 4, meta: { countsAs: 'retired' } }
 ];
+
+export const COUNTS_AS_VALUES = ['in_stock', 'assigned', 'retired', 'other'];
 
 const OPTION_KINDS = new Set(['status', 'department', 'location']);
 const CUSTOM_FIELD_TYPES = new Set(['text', 'number', 'date', 'select', 'boolean']);
@@ -19,12 +21,41 @@ export async function ensureOptionsSeeded(db, organizationId) {
   );
   if (existing) return false;
 
+  const departments = await db.all(`
+    SELECT DISTINCT department AS label
+    FROM people
+    WHERE organization_id = ? AND department IS NOT NULL AND TRIM(department) <> ''
+    ORDER BY LOWER(department)
+  `, [organizationId]);
+
   await db.transaction(async (tx) => {
     for (const status of DEFAULT_STATUSES) {
       await insertOption(tx, organizationId, 'status', status);
     }
+    let departmentOrder = 0;
+    for (const row of departments) {
+      const label = clean(row.label);
+      if (!label) continue;
+      await insertOption(tx, organizationId, 'department', {
+        key: catalogKey(label),
+        label,
+        sortOrder: departmentOrder,
+        meta: {}
+      });
+      departmentOrder += 1;
+    }
   });
   return true;
+}
+
+export async function listAllOptions(db, organizationId, { includeArchived = false } = {}) {
+  await ensureOptionsSeeded(db, organizationId);
+  const [status, department, location] = await Promise.all([
+    listOptions(db, organizationId, 'status', { includeArchived }),
+    listOptions(db, organizationId, 'department', { includeArchived }),
+    listOptions(db, organizationId, 'location', { includeArchived })
+  ]);
+  return { status, department, location };
 }
 
 export async function listOptions(db, organizationId, kind, { includeArchived = false } = {}) {
@@ -56,7 +87,7 @@ export async function createOption(db, organizationId, kind, input) {
   const sortOrder = Number.isFinite(input.sortOrder)
     ? input.sortOrder
     : await nextSortOrder(db, organizationId, kind);
-  const meta = input.meta && typeof input.meta === 'object' ? input.meta : {};
+  const meta = normalizeOptionMeta(kind, input.meta);
   const id = randomUUID();
   await db.run(`
     INSERT INTO org_options (id, organization_id, kind, key, label, sort_order, meta_json)
@@ -80,7 +111,9 @@ export async function updateOption(db, organizationId, optionId, input) {
   if (duplicate) throw badRequest('Another option already uses that key');
 
   const sortOrder = input.sortOrder === undefined ? existing.sortOrder : input.sortOrder;
-  const meta = input.meta === undefined ? existing.meta : (input.meta || {});
+  const meta = input.meta === undefined
+    ? existing.meta
+    : normalizeOptionMeta(existing.kind, input.meta);
   await db.run(`
     UPDATE org_options
     SET key = ?, label = ?, sort_order = ?, meta_json = ?
@@ -244,9 +277,70 @@ export async function ensureDepartmentOption(db, organizationId, label) {
 
 export function countsAs(statusKey, statusOptions = []) {
   const validation = validateStatus(statusKey, statusOptions);
-  if (!validation.valid) return 'unknown';
+  if (!validation.valid) return 'other';
   const meta = validation.option?.meta || parseMetaJson(validation.option?.metaJson);
-  return meta.countsAs || validation.key;
+  const value = meta.countsAs || validation.key;
+  return COUNTS_AS_VALUES.includes(value) ? value : 'other';
+}
+
+export function validateCustomFields(custom, fieldDefs = []) {
+  const values = custom && typeof custom === 'object' && !Array.isArray(custom) ? custom : {};
+  const result = {};
+  const errors = [];
+
+  for (const field of fieldDefs.filter((item) => !item.archivedAt)) {
+    const raw = values[field.key];
+    const missing = raw === undefined || raw === null || raw === '';
+    if (missing) {
+      if (field.required) errors.push(`${field.label} is required`);
+      continue;
+    }
+
+    if (field.type === 'boolean') {
+      result[field.key] = raw === true || raw === 'true' || raw === 1 || raw === '1';
+      continue;
+    }
+    if (field.type === 'number') {
+      const number = Number(raw);
+      if (!Number.isFinite(number)) {
+        errors.push(`${field.label} must be a number`);
+        continue;
+      }
+      result[field.key] = number;
+      continue;
+    }
+    if (field.type === 'date') {
+      const text = clean(raw);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+        errors.push(`${field.label} must be a date (YYYY-MM-DD)`);
+        continue;
+      }
+      result[field.key] = text;
+      continue;
+    }
+    if (field.type === 'select') {
+      const text = clean(raw);
+      if (field.options.length && !field.options.includes(text)) {
+        errors.push(`${field.label} must be one of the allowed options`);
+        continue;
+      }
+      result[field.key] = text;
+      continue;
+    }
+    result[field.key] = clean(raw);
+  }
+
+  return { valid: errors.length === 0, values: result, errors };
+}
+
+function normalizeOptionMeta(kind, meta) {
+  const value = meta && typeof meta === 'object' && !Array.isArray(meta) ? { ...meta } : {};
+  if (kind === 'status') {
+    const countsAsValue = clean(value.countsAs || value.counts_as || 'other');
+    value.countsAs = COUNTS_AS_VALUES.includes(countsAsValue) ? countsAsValue : 'other';
+    delete value.counts_as;
+  }
+  return value;
 }
 
 export function parseMetaJson(raw) {
