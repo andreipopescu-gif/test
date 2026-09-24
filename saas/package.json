@@ -8,7 +8,7 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test": "node --test",
-    "test:postgres": "node --test test/postgres.test.js test/multitenant-import.test.js",
+    "test:postgres": "node --test test/postgres.test.js test/multitenant-import.test.js test/exception-api.test.js",
     "pilot:validate": "node --test test/multitenant-import.test.js",
     "backup": "node scripts/backup.js",
     "check:staging": "node scripts/check-staging.js",
