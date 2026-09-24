@@ -24,7 +24,7 @@ test('the demo connector syncs Entra + Jamf data and every demo issue shows up',
     const admin = await api.register(`Issues ${randomUUID().slice(0, 6)}`);
     await api.put('/api/connections/mock', admin.token, {});
     const sync = await api.post('/api/connections/mock/sync', admin.token, {});
-    assert.equal(sync.users.created, 5);
+    assert.equal(sync.users.created, 6);
     assert.equal(sync.devices.created, 6);
     assert.ok(sync.exceptions.open >= DEMO_RULES.length);
 

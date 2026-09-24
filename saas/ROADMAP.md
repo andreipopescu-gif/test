@@ -729,6 +729,28 @@ Concretely, in order:
 
 ---
 
+## Product direction: IT issues inbox
+
+The commercial value is the list of things to fix, not the inventory table.
+Phases after Phase 3b follow that:
+
+1. **Exceptions and inbox — done.** Migration 7 (presence per source,
+   `last_seen_at`, `exceptions`, `exception_events`, rule settings,
+   `connections`), seven rules computed from imported data, Issues tab,
+   dashboard cards, person/device overview, rule settings.
+2. **Live connectors — next, needs a test Entra tenant and Jamf instance.**
+   Entra: Graph `User.Read.All` with admin consent (client credentials), plus
+   `signInActivity` later for stale accounts. Jamf Pro: API client with a
+   read-only role on computers, mobile devices and users. Both plug into
+   `saas/src/connectors/` and reuse the import pipeline; add a scheduled sync
+   and per-connection error reporting.
+3. **Confirmed actions.** Start with "account disabled → device still
+   assigned → alert → IT approves → mark for recovery / reassign", then
+   Jamf lock or unassign behind an explicit confirmation, a dry-run view and
+   an audit entry. No destructive action without a human approval.
+4. **Deeper checks** once live data exists: MFA registration, licence
+   assignment vs. active users, Jamf/Intune compliance state.
+
 ## Sequencing summary
 
 - **now → 2026-10-21:** Phase 0. Non-negotiable, the database expires.

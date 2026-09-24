@@ -32,7 +32,8 @@ export function mockUsers() {
     user('dan.ionescu', 'Dan', 'Ionescu', 'Sales', 'Account Manager', 'Yes', 'Ana Pop'),
     user('maria.stan', 'Maria', 'Stan', 'Finance', 'Accountant', 'No', 'Ana Pop'),
     user('radu.marin', 'Radu', 'Marin', 'Engineering', 'Engineering Manager', 'Yes', ''),
-    user('ioana.dumitru', 'Ioana', 'Dumitru', 'Design', 'Designer', 'Yes', 'Radu Marin')
+    user('ioana.dumitru', 'Ioana', 'Dumitru', 'Design', 'Designer', 'Yes', 'Radu Marin'),
+    user('elena.vasile', 'Elena', 'Vasile', 'Sales', 'Sales Representative', 'Yes', 'Dan Ionescu')
   ];
 }
 

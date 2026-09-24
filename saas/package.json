@@ -13,6 +13,7 @@
     "backup": "node scripts/backup.js",
     "check:staging": "node scripts/check-staging.js",
     "seed:test": "node scripts/seed-test-env.js",
+    "seed:demo": "node scripts/seed-demo-issues.js",
     "reset:test": "node scripts/reset-test-env.js"
   },
   "dependencies": {

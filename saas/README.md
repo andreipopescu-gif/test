@@ -1,7 +1,45 @@
 # IT Inventory SaaS (MVP)
 
+One place for IT to see who has which device, what state it is in, and what
+disagrees between the directory (Microsoft Entra ID) and the MDM (Jamf,
+Intune). The product answers "what do I need to fix today", not only "here is
+the data".
+
 Multi-client cloud experiment on branch `saas`.  
 The offline Windows app stays on branch `local` (same repo).
+
+## Issues: what needs fixing
+
+After every import, connector sync or manual change, each organization is
+re-checked against these rules. Results land in the **Issues** tab and on the
+dashboard; each one says what is wrong and what to do next.
+
+| Rule | Severity | Fires when |
+|------|----------|------------|
+| Active user without a device | low | A user present and enabled in the directory has no device assigned |
+| Device without an owner | medium | An MDM device has no owner but is still checking in or reports a user |
+| Disabled account still holds a device | high | The directory disabled the account, the device is still assigned |
+| Stale check-in | medium (high at 2× the threshold) | Last MDM check-in older than the threshold (30 days by default) |
+| Missing from MDM | medium | The device was not in the latest export from its MDM |
+| Owner mismatch | medium | The MDM reports a different user than the inventory assignment |
+| Possible duplicate | low / medium | Two records share an MDM id, or one person holds several devices of one category |
+
+IT can assign an issue, snooze it, resolve or dismiss it with a note; every
+step is kept in the issue history and the audit log. An issue closes itself
+when the condition disappears and reopens if it comes back; a dismissed issue
+stays dismissed. Admins tune thresholds and switch rules off in
+**Settings → Issue rules**. Nothing in this flow changes Entra or Jamf.
+
+Connections (**Settings → Connections**) share one interface: a provider
+returns records shaped like its CSV export, and they go through the same
+preview and apply as an upload. Today only the demo provider syncs; Microsoft
+Entra (`User.Read.All`, admin consent) and Jamf Pro (API client with a
+read-only role) are declared with their minimum permissions and will sync once
+a test tenant is available. Credentials are encrypted with
+`SAAS_CONNECTOR_KEY`.
+
+`npm run seed:demo` fills an organization with demo Entra users and Jamf Macs
+so every rule has an example.
 
 ## What this MVP includes
 
@@ -41,7 +79,11 @@ The offline Windows app stays on branch `local` (same repo).
 
 - Invoice PDF import, PV DOCX handover documents, JSON backup/restore
 - Microsoft/Google SSO
-- Hosted Intune/Jamf sync (API pull); CSV/ZIP import covers the same MDMs
+- Live Entra / Jamf / Intune sync (the connector layer and demo provider are
+  in place; CSV/ZIP import covers the same data meanwhile)
+- Actions that change Entra or Jamf (lock, revoke, reassign) — planned behind
+  explicit confirmation
+- MFA, licence and compliance checks (need the live connectors)
 - Billing
 
 ## Run
@@ -72,6 +114,7 @@ to use PostgreSQL instead.
 | `SAAS_MAX_IMPORT_ROWS` | `20000` | CSV data row cap |
 | `DATABASE_URL` | empty | PostgreSQL connection URL |
 | `DATABASE_SSL` | `false` | Enable TLS for an external PostgreSQL endpoint |
+| `SAAS_CONNECTOR_KEY` | empty | Encrypts connector credentials; without it credentials cannot be saved |
 
 `SAAS_JWT_SECRET` is mandatory everywhere, not only in production: a shared
 default would let anyone mint a token for any organization.
