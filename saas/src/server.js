@@ -61,6 +61,8 @@ import {
   updateException
 } from './exceptions/engine.js';
 import { RULES } from './exceptions/rules.js';
+import { describeProvider, getProvider, PROVIDERS, recordsToCsv } from './connectors/index.js';
+import { canStoreCredentials, decryptCredentials, encryptCredentials } from './connectors/secrets.js';
 import { assetsCsv, buildReportRows, reportTypes, rowsToCsv } from './reports.js';
 import { createImportPolicy } from '../../src/import/import-policy.js';
 import { isWarrantyExpiringWithinDays } from '../../src/utils/asset-model-label.js';
@@ -416,6 +418,30 @@ async function handleApi(req, res, url) {
     const result = await deleteImportProfile(db, session.organizationId, id);
     await addAudit(session, 'import.profile_delete', 'import_profile', id, result);
     return sendJson(res, result);
+  }
+
+  if (method === 'GET' && path === '/api/connections') {
+    return sendJson(res, await listConnections(session.organizationId));
+  }
+
+  if (method === 'PUT' && /^\/api\/connections\/[^/]+$/.test(path)) {
+    requireRole(session, ['admin']);
+    const connection = await saveConnection(session, path.split('/')[3], await readJson(req));
+    return sendJson(res, connection);
+  }
+
+  if (method === 'DELETE' && /^\/api\/connections\/[^/]+$/.test(path)) {
+    requireRole(session, ['admin']);
+    const provider = path.split('/')[3];
+    await db.run('DELETE FROM connections WHERE organization_id = ? AND provider = ?', [session.organizationId, provider]);
+    await addAudit(session, 'connection.delete', 'connection', provider);
+    return sendJson(res, { ok: true, provider });
+  }
+
+  if (method === 'POST' && /^\/api\/connections\/[^/]+\/sync$/.test(path)) {
+    requireRole(session, ['admin', 'it']);
+    await enforceRateLimit(req, 'connector-sync', 20, 60 * 60_000);
+    return sendJson(res, await syncConnection(session, path.split('/')[3]));
   }
 
   if (method === 'GET' && path === '/api/exceptions') {
@@ -1411,6 +1437,139 @@ async function getPersonOverview(organizationId, personId) {
     || item.details?.person?.id === personId
   );
   return { person, assets, exceptions };
+}
+
+async function listConnections(organizationId) {
+  const rows = await db.all(`
+    SELECT provider, status, scopes_json AS "scopesJson", config_json AS "configJson",
+           encrypted_credentials IS NOT NULL AS "hasCredentials",
+           last_sync_at AS "lastSyncAt", last_error AS "lastError", updated_at AS "updatedAt"
+    FROM connections WHERE organization_id = ?
+  `, [organizationId]);
+  return {
+    canStoreCredentials: canStoreCredentials(),
+    providers: PROVIDERS.map((provider) => {
+      const row = rows.find((item) => item.provider === provider.key);
+      return {
+        ...describeProvider(provider),
+        connection: row
+          ? {
+              status: row.status,
+              scopes: parseJson(row.scopesJson, []),
+              config: parseJson(row.configJson, {}),
+              hasCredentials: Boolean(Number(row.hasCredentials) || row.hasCredentials === true),
+              lastSyncAt: row.lastSyncAt,
+              lastError: row.lastError,
+              updatedAt: row.updatedAt
+            }
+          : null
+      };
+    })
+  };
+}
+
+async function saveConnection(session, providerKey, input) {
+  const provider = getProvider(providerKey);
+  if (!provider) throw notFound('Unknown connector');
+  const now = new Date().toISOString();
+  const config = input.config && typeof input.config === 'object' ? input.config : {};
+  const credentials = input.credentials && typeof input.credentials === 'object' ? input.credentials : null;
+  if (credentials) {
+    const unknown = Object.keys(credentials).filter((field) => !provider.credentialFields.includes(field));
+    if (unknown.length) throw badRequest(`Unknown credential fields: ${unknown.join(', ')}`);
+  }
+  const encrypted = credentials ? encryptCredentials(credentials) : null;
+  const status = provider.live ? (encrypted ? 'configured' : 'pending') : 'connected';
+  const existing = await db.get(
+    'SELECT id, encrypted_credentials AS "encrypted" FROM connections WHERE organization_id = ? AND provider = ?',
+    [session.organizationId, provider.key]
+  );
+  if (existing) {
+    await db.run(`
+      UPDATE connections
+      SET status = ?, scopes_json = ?, config_json = ?, encrypted_credentials = ?, updated_at = ?
+      WHERE id = ? AND organization_id = ?
+    `, [
+      status === 'pending' && existing.encrypted ? 'configured' : status,
+      JSON.stringify(provider.requiredScopes),
+      JSON.stringify(config),
+      encrypted || existing.encrypted || null,
+      now,
+      existing.id,
+      session.organizationId
+    ]);
+  } else {
+    await db.run(`
+      INSERT INTO connections (
+        id, organization_id, provider, status, scopes_json, config_json, encrypted_credentials, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      randomUUID(), session.organizationId, provider.key, status,
+      JSON.stringify(provider.requiredScopes), JSON.stringify(config), encrypted, now, now
+    ]);
+  }
+  await addAudit(session, 'connection.save', 'connection', provider.key, {
+    status, credentialsUpdated: Boolean(encrypted)
+  });
+  return (await listConnections(session.organizationId)).providers.find((item) => item.key === provider.key);
+}
+
+/**
+ * Pulls one provider and pushes its records through the ordinary import
+ * preview and apply, so a sync and a CSV upload can never disagree about
+ * matching, assignments or the missing-from-MDM flag.
+ */
+async function syncConnection(session, providerKey) {
+  const provider = getProvider(providerKey);
+  if (!provider) throw notFound('Unknown connector');
+  const row = await db.get(
+    'SELECT id, config_json AS "configJson", encrypted_credentials AS "encrypted" FROM connections WHERE organization_id = ? AND provider = ?',
+    [session.organizationId, provider.key]
+  );
+  if (!row) throw badRequest('Connect this provider before syncing');
+  const now = new Date().toISOString();
+  try {
+    const data = await provider.fetch({
+      config: parseJson(row.configJson, {}),
+      credentials: row.encrypted ? decryptCredentials(row.encrypted) : {}
+    });
+    const result = { provider: provider.key };
+    if (data.users?.records?.length) {
+      const preview = await createUserImportPreview(session, syntheticUpload(provider.key, 'users', data.users));
+      if (preview.needsMapping) throw badRequest('Connector users could not be mapped');
+      result.users = (await applyUserImportBatch(session, { batchId: preview.batchId })).summary;
+    }
+    if (data.devices?.records?.length) {
+      const preview = await createImportPreview(session, syntheticUpload(provider.key, 'devices', data.devices));
+      if (preview.needsMapping) throw badRequest('Connector devices could not be mapped');
+      result.devices = {
+        ...(await applyImportBatch(session, { batchId: preview.batchId })).summary,
+        needsReview: preview.summary.needsReview
+      };
+    }
+    await db.run(
+      "UPDATE connections SET status = 'connected', last_sync_at = ?, last_error = NULL, updated_at = ? WHERE id = ?",
+      [now, now, row.id]
+    );
+    result.exceptions = await refreshExceptions(session);
+    await addAudit(session, 'connection.sync', 'connection', provider.key, {
+      users: result.users, devices: result.devices
+    });
+    return result;
+  } catch (error) {
+    await db.run(
+      "UPDATE connections SET status = 'error', last_error = ?, updated_at = ? WHERE id = ?",
+      [String(error.message || error).slice(0, 500), now, row.id]
+    );
+    throw error;
+  }
+}
+
+function syntheticUpload(providerKey, kind, dataset) {
+  return {
+    file: { buffer: recordsToCsv(dataset.records), originalName: `${providerKey}-${kind}.csv` },
+    fields: { source: dataset.source }
+  };
 }
 
 // Exceptions are derived data. A failed rescan must not fail the mutation that

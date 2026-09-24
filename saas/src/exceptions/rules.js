@@ -145,13 +145,23 @@ function userActiveNoDevice({ people, assetsByPerson }) {
     }));
 }
 
-function deviceNoOwner({ assets }) {
+// A spare in stock is not a problem; an unowned device that is still checking
+// in to the MDM is being used by somebody the inventory does not know about.
+function deviceNoOwner({ assets, settings, now }) {
+  const recent = now.getTime() - settings.staleDays * DAY_MS;
   return assets
     .filter((asset) => !asset.personId && !isRetired(asset) && isFromMdm(asset))
-    .filter((asset) => asset.status !== 'in_stock' || reportedUser(asset))
+    .filter((asset) => {
+      const seen = Date.parse(asset.lastSeenAt || '');
+      return asset.status !== 'in_stock' || reportedUser(asset) || (Number.isFinite(seen) && seen >= recent);
+    })
     .map((asset) => ({
       entityId: asset.id,
-      details: { asset: assetSummary(asset), reportedUserEmail: reportedUser(asset) }
+      details: {
+        asset: assetSummary(asset),
+        reportedUserEmail: reportedUser(asset),
+        lastSeenAt: asset.lastSeenAt || null
+      }
     }));
 }
 
