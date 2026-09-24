@@ -1,0 +1,3 @@
+Device Name,Serial Number,Model,Manufacturer,Model Identifier,OS Version,User Name,User Email,Enrollment Date,Last Check-in,Agent ID
+ADD-MBP-01,C02ADD001,MacBook Pro 14,Apple,"Mac16,1",15.4,Ana Marin,ana@example.com,2024-10-01,2025-03-02,addigy-agent-1
+ADD-MBA-02,C02ADD002,MacBook Air,Apple,"Mac15,13",15.4,Dan Pavel,dan@example.com,2024-10-02,2025-03-03,addigy-agent-2

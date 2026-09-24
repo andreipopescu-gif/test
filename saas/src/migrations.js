@@ -291,6 +291,113 @@ export const sqliteMigrations = [
       CREATE INDEX IF NOT EXISTS idx_import_batches_org ON import_batches(organization_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_import_rows_batch ON import_rows(batch_id);
     `
+  },
+  {
+    // Per-tenant editable catalog metadata, options, custom fields and saved
+    // import profiles. import_batches.source is widened so new MDM presets and
+    // mapped imports can be stored without a second rebuild later.
+    version: 6,
+    sql: `
+      ALTER TABLE catalog_categories ADD COLUMN archived_at TEXT;
+      ALTER TABLE catalog_categories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE catalog_brands ADD COLUMN archived_at TEXT;
+      ALTER TABLE catalog_brands ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE catalog_models ADD COLUMN archived_at TEXT;
+      ALTER TABLE catalog_models ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+
+      CREATE TABLE IF NOT EXISTS org_options (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('status', 'department', 'location')),
+        key TEXT NOT NULL,
+        label TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
+        meta_json TEXT NOT NULL DEFAULT '{}',
+        UNIQUE (organization_id, kind, key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_org_options_org_kind ON org_options(organization_id, kind);
+
+      CREATE TABLE IF NOT EXISTS custom_field_defs (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        entity TEXT NOT NULL CHECK (entity IN ('asset', 'person')),
+        key TEXT NOT NULL,
+        label TEXT NOT NULL,
+        type TEXT NOT NULL CHECK (type IN ('text', 'number', 'date', 'select', 'boolean')),
+        options_json TEXT NOT NULL DEFAULT '[]',
+        required INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
+        UNIQUE (organization_id, entity, key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_custom_field_defs_org ON custom_field_defs(organization_id, entity);
+
+      ALTER TABLE assets ADD COLUMN location_key TEXT;
+      ALTER TABLE assets ADD COLUMN custom_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE people ADD COLUMN custom_json TEXT NOT NULL DEFAULT '{}';
+
+      CREATE TABLE IF NOT EXISTS import_profiles (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        preset_key TEXT,
+        header_signature TEXT NOT NULL,
+        mapping_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (organization_id, header_signature)
+      );
+      CREATE INDEX IF NOT EXISTS idx_import_profiles_org ON import_profiles(organization_id);
+
+      CREATE TABLE import_batches_v6 (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL DEFAULT 'devices' CHECK (kind IN ('devices', 'users')),
+        source TEXT NOT NULL,
+        profile_id TEXT REFERENCES import_profiles(id) ON DELETE SET NULL,
+        file_name TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('preview', 'applied', 'cancelled')),
+        summary_json TEXT NOT NULL,
+        policy_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        applied_at TEXT
+      );
+      INSERT INTO import_batches_v6 (
+        id, organization_id, user_id, kind, source, file_name, status,
+        summary_json, policy_json, created_at, applied_at
+      )
+      SELECT id, organization_id, user_id, kind, source, file_name, status,
+             summary_json, policy_json, created_at, applied_at
+      FROM import_batches;
+
+      CREATE TABLE import_rows_v6 (
+        id TEXT PRIMARY KEY,
+        batch_id TEXT NOT NULL REFERENCES import_batches_v6(id) ON DELETE CASCADE,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        row_key TEXT NOT NULL,
+        action TEXT NOT NULL CHECK (
+          action IN ('create', 'update', 'reassign', 'skip', 'needs_review')
+        ),
+        data_json TEXT NOT NULL,
+        warnings_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        UNIQUE (batch_id, row_key)
+      );
+      INSERT INTO import_rows_v6 (
+        id, batch_id, organization_id, row_key, action, data_json, warnings_json, created_at
+      )
+      SELECT id, batch_id, organization_id, row_key, action, data_json, warnings_json, created_at
+      FROM import_rows;
+
+      DROP TABLE import_rows;
+      DROP TABLE import_batches;
+      ALTER TABLE import_batches_v6 RENAME TO import_batches;
+      ALTER TABLE import_rows_v6 RENAME TO import_rows;
+      CREATE INDEX IF NOT EXISTS idx_import_batches_org ON import_batches(organization_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_import_rows_batch ON import_rows(batch_id);
+    `
   }
 ];
 
@@ -403,6 +510,65 @@ export const postgresMigrations = [
       ALTER TABLE import_rows DROP CONSTRAINT IF EXISTS import_rows_action_check;
       ALTER TABLE import_rows ADD CONSTRAINT import_rows_action_check
         CHECK (action IN ('create', 'update', 'reassign', 'skip', 'needs_review'));
+    `
+  },
+  {
+    version: 6,
+    sql: `
+      ALTER TABLE catalog_categories ADD COLUMN IF NOT EXISTS archived_at TEXT;
+      ALTER TABLE catalog_categories ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE catalog_brands ADD COLUMN IF NOT EXISTS archived_at TEXT;
+      ALTER TABLE catalog_brands ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE catalog_models ADD COLUMN IF NOT EXISTS archived_at TEXT;
+      ALTER TABLE catalog_models ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
+
+      CREATE TABLE IF NOT EXISTS org_options (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('status', 'department', 'location')),
+        key TEXT NOT NULL,
+        label TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
+        meta_json TEXT NOT NULL DEFAULT '{}',
+        UNIQUE (organization_id, kind, key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_org_options_org_kind ON org_options(organization_id, kind);
+
+      CREATE TABLE IF NOT EXISTS custom_field_defs (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        entity TEXT NOT NULL CHECK (entity IN ('asset', 'person')),
+        key TEXT NOT NULL,
+        label TEXT NOT NULL,
+        type TEXT NOT NULL CHECK (type IN ('text', 'number', 'date', 'select', 'boolean')),
+        options_json TEXT NOT NULL DEFAULT '[]',
+        required BOOLEAN NOT NULL DEFAULT FALSE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
+        UNIQUE (organization_id, entity, key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_custom_field_defs_org ON custom_field_defs(organization_id, entity);
+
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS location_key TEXT;
+      ALTER TABLE assets ADD COLUMN IF NOT EXISTS custom_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE people ADD COLUMN IF NOT EXISTS custom_json TEXT NOT NULL DEFAULT '{}';
+
+      CREATE TABLE IF NOT EXISTS import_profiles (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        preset_key TEXT,
+        header_signature TEXT NOT NULL,
+        mapping_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (organization_id, header_signature)
+      );
+      CREATE INDEX IF NOT EXISTS idx_import_profiles_org ON import_profiles(organization_id);
+
+      ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS profile_id TEXT REFERENCES import_profiles(id) ON DELETE SET NULL;
+      ALTER TABLE import_batches DROP CONSTRAINT IF EXISTS import_batches_source_check;
     `
   }
 ];

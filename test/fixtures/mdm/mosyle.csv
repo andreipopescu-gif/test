@@ -1,0 +1,3 @@
+Device Name,Serial Number,Model,Manufacturer,Model Identifier,Operating System,OS Version,User Name,User Email,Enrollment Date,Last Enrollment Date,Device Udid
+MOS-MBP-01,C02MOS001,MacBook Pro 14,Apple,"Mac16,1",macOS,15.4,Ioana Marin,ioana@example.com,2024-03-01,2025-02-01,mosyle-udid-1
+MOS-MBA-02,C02MOS002,MacBook Air,Apple,"Mac15,13",macOS,15.4,Radu Ion,radu@example.com,2024-04-02,2025-02-02,mosyle-udid-2

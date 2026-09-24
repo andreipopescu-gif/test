@@ -1,0 +1,345 @@
+{
+  "categories": [
+    {
+      "name": "Laptop",
+      "brands": [
+        {
+          "name": "Lenovo",
+          "models": [
+            { "name": "ThinkPad T14", "generation": "Gen 1", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14", "generation": "Gen 2", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14", "generation": "Gen 3", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14", "generation": "Gen 4", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14", "generation": "Gen 5", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14", "generation": "Gen 6", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14s", "generation": "Gen 1", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14s", "generation": "Gen 2", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14s", "generation": "Gen 3", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14s", "generation": "Gen 4", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14s", "generation": "Gen 5", "deviceType": "Laptop" },
+            { "name": "ThinkPad T14s", "generation": "Gen 6", "deviceType": "Laptop" },
+            { "name": "ThinkPad X1 Carbon", "generation": "Gen 9", "deviceType": "Laptop" },
+            { "name": "ThinkPad X1 Carbon", "generation": "Gen 10", "deviceType": "Laptop" },
+            { "name": "ThinkPad X1 Carbon", "generation": "Gen 11", "deviceType": "Laptop" },
+            { "name": "ThinkPad X1 Carbon", "generation": "Gen 12", "deviceType": "Laptop" },
+            { "name": "ThinkPad X13", "generation": "Gen 1", "deviceType": "Laptop" },
+            { "name": "ThinkPad X13", "generation": "Gen 2", "deviceType": "Laptop" },
+            { "name": "ThinkPad X13", "generation": "Gen 3", "deviceType": "Laptop" },
+            { "name": "ThinkPad X13", "generation": "Gen 4", "deviceType": "Laptop" },
+            { "name": "ThinkPad X13", "generation": "Gen 5", "deviceType": "Laptop" },
+            { "name": "ThinkPad X13", "generation": "Gen 6", "deviceType": "Laptop" },
+            { "name": "ThinkPad L14", "generation": "Gen 1", "deviceType": "Laptop" },
+            { "name": "ThinkPad L14", "generation": "Gen 2", "deviceType": "Laptop" },
+            { "name": "ThinkPad L14", "generation": "Gen 3", "deviceType": "Laptop" },
+            { "name": "ThinkPad L14", "generation": "Gen 4", "deviceType": "Laptop" },
+            { "name": "ThinkPad L14", "generation": "Gen 5", "deviceType": "Laptop" },
+            { "name": "ThinkPad L14", "generation": "Gen 6", "deviceType": "Laptop" },
+            { "name": "ThinkPad P1", "generation": "Gen 4", "deviceType": "Laptop" },
+            { "name": "ThinkPad P1", "generation": "Gen 5", "deviceType": "Laptop" },
+            { "name": "ThinkPad P1", "generation": "Gen 6", "deviceType": "Laptop" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Laptop" }
+          ]
+        },
+        {
+          "name": "Apple MacBook",
+          "models": [
+            { "name": "MacBook Air", "generation": "M1", "deviceType": "Laptop" },
+            { "name": "MacBook Air", "generation": "M2", "deviceType": "Laptop" },
+            { "name": "MacBook Air", "generation": "M3", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 14", "generation": "M1", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 14", "generation": "M2", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 14", "generation": "M3", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 16", "generation": "M1", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 16", "generation": "M2", "deviceType": "Laptop" },
+            { "name": "MacBook Pro 16", "generation": "M3", "deviceType": "Laptop" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Laptop" }
+          ]
+        },
+        {
+          "name": "Dell",
+          "models": [
+            { "name": "Latitude 5440", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "Latitude 7440", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "XPS 13", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "XPS 15", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "Precision 5680", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Laptop" }
+          ]
+        },
+        {
+          "name": "HP",
+          "models": [
+            { "name": "EliteBook 840", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "EliteBook 860", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "ProBook 450", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "ZBook Firefly", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Laptop" }
+          ]
+        },
+        {
+          "name": "ASUS",
+          "models": [
+            { "name": "ExpertBook B9", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "Zenbook 14", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "Vivobook 15", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Laptop" }
+          ]
+        },
+        {
+          "name": "Acer",
+          "models": [
+            { "name": "TravelMate P2", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "Swift 3", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Laptop" }
+          ]
+        },
+        {
+          "name": "Microsoft Surface",
+          "models": [
+            { "name": "Surface Laptop 5", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "Surface Laptop Studio", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Laptop" }
+          ]
+        },
+        {
+          "name": "Framework",
+          "models": [
+            { "name": "Framework Laptop 13", "generation": "Standard", "deviceType": "Laptop" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Laptop" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Desktop",
+      "brands": [
+        {
+          "name": "Dell",
+          "models": [
+            { "name": "OptiPlex 7010", "generation": "Standard", "deviceType": "Desktop" },
+            { "name": "OptiPlex 7090", "generation": "Standard", "deviceType": "Desktop" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Desktop" }
+          ]
+        },
+        {
+          "name": "HP",
+          "models": [
+            { "name": "EliteDesk 800", "generation": "Standard", "deviceType": "Desktop" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Desktop" }
+          ]
+        },
+        {
+          "name": "Lenovo",
+          "models": [
+            { "name": "ThinkCentre M70q", "generation": "Standard", "deviceType": "Desktop" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Desktop" }
+          ]
+        },
+        {
+          "name": "Apple",
+          "models": [
+            { "name": "iMac 24", "generation": "Standard", "deviceType": "Desktop" },
+            { "name": "Mac mini", "generation": "M2", "deviceType": "Desktop" },
+            { "name": "Mac Studio", "generation": "Standard", "deviceType": "Desktop" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Desktop" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Monitor",
+      "brands": [
+        {
+          "name": "Dell",
+          "models": [
+            { "name": "UltraSharp U2723QE", "generation": "Standard", "deviceType": "Monitor" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Monitor" }
+          ]
+        },
+        {
+          "name": "HP",
+          "models": [
+            { "name": "E27", "generation": "Standard", "deviceType": "Monitor" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Monitor" }
+          ]
+        },
+        {
+          "name": "Lenovo",
+          "models": [
+            { "name": "ThinkVision T27", "generation": "Standard", "deviceType": "Monitor" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Monitor" }
+          ]
+        },
+        {
+          "name": "LG",
+          "models": [
+            { "name": "27UP850", "generation": "Standard", "deviceType": "Monitor" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Monitor" }
+          ]
+        },
+        {
+          "name": "Samsung",
+          "models": [
+            { "name": "ViewFinity S8", "generation": "Standard", "deviceType": "Monitor" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Monitor" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Phone",
+      "brands": [
+        {
+          "name": "Apple",
+          "models": [
+            { "name": "iPhone 13", "generation": "Standard", "deviceType": "Phone" },
+            { "name": "iPhone 14", "generation": "Standard", "deviceType": "Phone" },
+            { "name": "iPhone 15", "generation": "Standard", "deviceType": "Phone" },
+            { "name": "iPhone 16", "generation": "Standard", "deviceType": "Phone" },
+            { "name": "iPhone SE", "generation": "3rd gen", "deviceType": "Phone" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Phone" }
+          ]
+        },
+        {
+          "name": "Samsung",
+          "models": [
+            { "name": "Galaxy S23", "generation": "Standard", "deviceType": "Phone" },
+            { "name": "Galaxy S24", "generation": "Standard", "deviceType": "Phone" },
+            { "name": "Galaxy A54", "generation": "Standard", "deviceType": "Phone" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Phone" }
+          ]
+        },
+        {
+          "name": "Google",
+          "models": [
+            { "name": "Pixel 7", "generation": "Standard", "deviceType": "Phone" },
+            { "name": "Pixel 8", "generation": "Standard", "deviceType": "Phone" },
+            { "name": "Pixel 8 Pro", "generation": "Standard", "deviceType": "Phone" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Phone" }
+          ]
+        },
+        {
+          "name": "Xiaomi",
+          "models": [
+            { "name": "13T", "generation": "Standard", "deviceType": "Phone" },
+            { "name": "Redmi Note 13", "generation": "Standard", "deviceType": "Phone" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Phone" }
+          ]
+        },
+        {
+          "name": "Motorola",
+          "models": [
+            { "name": "Edge 40", "generation": "Standard", "deviceType": "Phone" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Phone" }
+          ]
+        },
+        {
+          "name": "Nokia",
+          "models": [
+            { "name": "G60", "generation": "Standard", "deviceType": "Phone" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Phone" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Tablet",
+      "brands": [
+        {
+          "name": "Apple",
+          "models": [
+            { "name": "iPad", "generation": "10th", "deviceType": "Tablet" },
+            { "name": "iPad Air", "generation": "M2", "deviceType": "Tablet" },
+            { "name": "iPad Pro 11", "generation": "M4", "deviceType": "Tablet" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Tablet" }
+          ]
+        },
+        {
+          "name": "Samsung",
+          "models": [
+            { "name": "Galaxy Tab S9", "generation": "Standard", "deviceType": "Tablet" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Tablet" }
+          ]
+        },
+        {
+          "name": "Microsoft",
+          "models": [
+            { "name": "Surface Pro 9", "generation": "Standard", "deviceType": "Tablet" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Tablet" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Dock/Peripheral",
+      "brands": [
+        {
+          "name": "Dell",
+          "models": [
+            { "name": "WD19TB", "generation": "Standard", "deviceType": "Dock/Peripheral" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Dock/Peripheral" }
+          ]
+        },
+        {
+          "name": "HP",
+          "models": [
+            { "name": "Thunderbolt Dock G4", "generation": "Standard", "deviceType": "Dock/Peripheral" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Dock/Peripheral" }
+          ]
+        },
+        {
+          "name": "Lenovo",
+          "models": [
+            { "name": "ThinkPad Universal Thunderbolt 4", "generation": "Standard", "deviceType": "Dock/Peripheral" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Dock/Peripheral" }
+          ]
+        },
+        {
+          "name": "CalDigit",
+          "models": [
+            { "name": "TS4", "generation": "Standard", "deviceType": "Dock/Peripheral" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Dock/Peripheral" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Meeting room",
+      "brands": [
+        {
+          "name": "Generic",
+          "models": [
+            { "name": "Teams Room", "generation": "Standard", "deviceType": "Meeting room" },
+            { "name": "Zoom Room", "generation": "Standard", "deviceType": "Meeting room" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Meeting room" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Networking",
+      "brands": [
+        {
+          "name": "Generic",
+          "models": [
+            { "name": "Switch", "generation": "Standard", "deviceType": "Networking" },
+            { "name": "Access Point", "generation": "Standard", "deviceType": "Networking" },
+            { "name": "Router", "generation": "Standard", "deviceType": "Networking" },
+            { "name": "Other", "generation": "Standard", "deviceType": "Networking" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Other",
+      "brands": [
+        {
+          "name": "Generic",
+          "models": [
+            { "name": "Other", "generation": "Standard", "deviceType": "Other" }
+          ]
+        }
+      ]
+    }
+  ]
+}

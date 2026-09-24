@@ -1,0 +1,3 @@
+Device Name,Serial Number,Model,Manufacturer,Operating System,OS Version,Owner Name,Owner Email,Created Date,Last Contact,Node ID
+NJA-LT-01,SNINJA001,Latitude 5440,Dell,Windows,11.0,Ana Pop,ana.pop@example.com,2024-07-01,2025-02-20,ninja-node-1
+NJA-LT-02,SNINJA002,EliteBook 840,HP,Windows,11.0,Dan Onea,dan.onea@example.com,2024-07-02,2025-02-21,ninja-node-2

@@ -1,0 +1,3 @@
+Device Name,Serial Number,Model,Manufacturer,Platform,OS Version,User Name,User Email,IMEI,Enrollment Date,Last Check-in,Device ID
+SOTI-PH-01,350890123456789,Galaxy S24,Samsung,Android,14,Ana Pop,ana.pop@example.com,350890123456789,2024-11-01,2025-03-04,soti-dev-1
+SOTI-LT-02,SNSOTI002,Latitude 5440,Dell,Windows,11.0,Dan Onea,dan.onea@example.com,,2024-11-02,2025-03-05,soti-dev-2

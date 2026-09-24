@@ -1,0 +1,3 @@
+Device Name,Serial Number,Model,Manufacturer,Platform,OS Version,User Name,User Email,Enrolled On,Last Reported,Device ID
+HX-PHONE-01,SNHX001,Galaxy S24,Samsung,Android,14,Ana Pop,ana.pop@example.com,2024-09-01,2025-02-28,hex-dev-1
+HX-LT-02,SNHX002,ThinkPad X13,Lenovo,Windows,11.0,Dan Onea,dan.onea@example.com,2024-09-02,2025-03-01,hex-dev-2

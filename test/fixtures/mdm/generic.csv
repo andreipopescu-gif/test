@@ -1,0 +1,3 @@
+Device Name,Serial Number,Model,Manufacturer,Model Identifier,OS,OS Version,User Email,Full Name,Enrollment Date,Last Check-in,Device ID
+GEN-LT-01,SNGEN001,ThinkPad T14,Lenovo,21CF,Windows,11.0,ana@example.com,Ana Marin,2024-12-01,2025-03-06,gen-dev-1
+GEN-LT-02,SNGEN002,MacBook Air,Apple,"Mac15,13",macOS,15.4,dan@example.com,Dan Pavel,2024-12-02,2025-03-07,gen-dev-2

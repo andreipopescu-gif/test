@@ -1,0 +1,3 @@
+Device Name,Device Serial Number,Model Name,Manufacturer,Model Identifier,OS Name,OS Version,Device User,Device User Email,First Enrollment Date,Last Enrollment Date,Device ID
+MBP-001,C02KAND001,MacBook Pro 14,Apple,"Mac16,1",macOS,15.4,Ana Marin,ana@example.com,2024-01-10,2025-03-01,kandji-1001
+MBP-002,C02KAND002,MacBook Air,Apple,"Mac15,13",macOS,15.4,Dan Pavel,dan@example.com,2024-02-11,2025-03-02,kandji-1002
