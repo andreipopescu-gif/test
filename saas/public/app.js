@@ -24,6 +24,9 @@ const state = {
   editingPerson: '',
   editingAsset: '',
   viewingAsset: null,
+  viewingPerson: null,
+  exceptionsSummary: null,
+  issueFilter: { status: 'active', rule: '', severity: '', assignee: '' },
   assetFilter: { search: '', status: '', category: '' },
   mergeKeepId: '',
   mergeAbsorbId: ''
@@ -212,7 +215,7 @@ function renderInvitation(token) {
 }
 
 async function loadData() {
-  const [people, assets, catalog, options, assetFields, personFields, importPresets, importProfiles] =
+  const [people, assets, catalog, options, assetFields, personFields, importPresets, importProfiles, exceptionsSummary] =
     await Promise.all([
       api('/api/people'),
       api('/api/assets'),
@@ -221,8 +224,10 @@ async function loadData() {
       api('/api/custom-fields?entity=asset').catch(() => []),
       api('/api/custom-fields?entity=person').catch(() => []),
       api('/api/import/presets').catch(() => []),
-      api('/api/import/profiles').catch(() => [])
+      api('/api/import/profiles').catch(() => []),
+      api('/api/exceptions/summary').catch(() => null)
     ]);
+  state.exceptionsSummary = exceptionsSummary;
   state.people = people;
   state.assets = assets;
   state.catalog = catalog;
@@ -391,6 +396,9 @@ function renderApp() {
       <div class="nav-row">
         <nav class="tabs" aria-label="Sections">
           <button type="button" data-tab="dashboard" class="${state.tab === 'dashboard' ? 'active' : ''}">Dashboard</button>
+          <button type="button" data-tab="issues" class="${state.tab === 'issues' ? 'active' : ''}">Issues${
+            state.exceptionsSummary?.open ? ` <span class="tab-count">${escapeHtml(state.exceptionsSummary.open)}</span>` : ''
+          }</button>
           <button type="button" data-tab="people" class="${state.tab === 'people' ? 'active' : ''}">People</button>
           <button type="button" data-tab="assets" class="${state.tab === 'assets' ? 'active' : ''}">Devices</button>
           <button type="button" data-tab="reports" class="${state.tab === 'reports' ? 'active' : ''}">Reports</button>
@@ -421,6 +429,7 @@ function renderApp() {
       renderApp();
     });
   });
+  document.addEventListener('click', onTabJump);
   document.querySelector('#logout').addEventListener('click', () => {
     state.token = '';
     localStorage.removeItem('saas.token');
@@ -434,6 +443,7 @@ function renderApp() {
     await acceptSession(result);
   });
   if (state.tab === 'dashboard') renderDashboard();
+  else if (state.tab === 'issues') renderIssues();
   else if (state.tab === 'people') renderPeople();
   else if (state.tab === 'assets') renderAssets();
   else if (state.tab === 'reports') renderReports();
@@ -443,12 +453,24 @@ function renderApp() {
   else renderMembers();
 }
 
+function onTabJump(event) {
+  const button = event.target.closest?.('[data-tab-jump]');
+  if (!button) return;
+  state.tab = button.dataset.tabJump;
+  renderApp();
+}
+
 async function renderDashboard() {
   const target = document.querySelector('#tabContent');
   target.innerHTML = '<section class="panel"><p class="muted">Loading…</p></section>';
-  const data = await api('/api/dashboard');
+  const [data, summary] = await Promise.all([
+    api('/api/dashboard'),
+    api('/api/exceptions/summary').catch(() => null)
+  ]);
   if (state.tab !== 'dashboard') return;
+  state.exceptionsSummary = summary;
   document.querySelector('#tabContent').innerHTML = `
+    ${summary ? issuesSummaryPanel(summary) : ''}
     <section class="panel">
       <div class="page-head">
         <div>
@@ -511,6 +533,231 @@ async function renderDashboard() {
       </div>
     </section>
   `;
+  document.querySelectorAll('[data-issue-rule]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.issueFilter = { ...state.issueFilter, status: 'active', rule: button.dataset.issueRule };
+      state.tab = 'issues';
+      renderApp();
+    });
+  });
+}
+
+function issuesSummaryPanel(summary) {
+  const rules = summary.byRule.filter((item) => item.count > 0);
+  const severity = Object.fromEntries(summary.bySeverity.map((item) => [item.severity, item.count]));
+  return `
+    <section class="panel">
+      <div class="page-head">
+        <div>
+          <h2>What needs fixing</h2>
+          <p class="lede">${summary.open
+            ? `${escapeHtml(summary.open)} open issue(s): ${escapeHtml(severity.high || 0)} high, ${escapeHtml(severity.medium || 0)} medium, ${escapeHtml(severity.low || 0)} low.`
+            : 'No open issues. Import or sync Entra and your MDM to check again.'}</p>
+        </div>
+        <button type="button" data-tab-jump="issues">Open inbox</button>
+      </div>
+      ${rules.length ? `<div class="issue-cards">${rules.map((item) => `
+        <button type="button" class="issue-card" data-issue-rule="${escapeHtml(item.ruleKey)}">
+          <span class="metric-value">${escapeHtml(item.count)}</span>
+          <span class="metric-label">${escapeHtml(item.label)}</span>
+        </button>
+      `).join('')}</div>` : ''}
+    </section>
+  `;
+}
+
+async function renderIssues() {
+  const target = document.querySelector('#tabContent');
+  target.innerHTML = '<section class="panel"><p class="muted">Loading…</p></section>';
+  const filter = state.issueFilter;
+  const query = new URLSearchParams(Object.entries(filter).filter(([, value]) => value)).toString();
+  const [items, rulesInfo, summary] = await Promise.all([
+    api(`/api/exceptions?${query}`),
+    api('/api/exceptions/rules'),
+    api('/api/exceptions/summary')
+  ]);
+  if (state.tab !== 'issues') return;
+  state.exceptionsSummary = summary;
+  const canAct = canWrite();
+  const groups = ['high', 'medium', 'low'].map((severity) => [severity, items.filter((item) => item.severity === severity)]);
+  target.innerHTML = `
+    <section class="panel">
+      <div class="page-head">
+        <div>
+          <h2>Issues</h2>
+          <p class="lede">What to fix between your directory, your MDM and the inventory. Nothing here changes Entra or Jamf.</p>
+        </div>
+        ${canAct ? '<button type="button" id="runScan" class="primary">Re-check now</button>' : ''}
+      </div>
+      <form id="issueFilters" class="grid">
+        <label>Status
+          <select name="status">
+            ${[['active', 'Open and snoozed'], ['open', 'Open'], ['snoozed', 'Snoozed'], ['resolved', 'Resolved'], ['dismissed', 'Dismissed']]
+              .map(([value, label]) => `<option value="${value}" ${filter.status === value ? 'selected' : ''}>${label}</option>`).join('')}
+          </select>
+        </label>
+        <label>Rule
+          <select name="rule">
+            <option value="">All rules</option>
+            ${rulesInfo.rules.map((rule) => `<option value="${escapeHtml(rule.key)}" ${filter.rule === rule.key ? 'selected' : ''}>${escapeHtml(rule.label)}</option>`).join('')}
+          </select>
+        </label>
+        <label>Severity
+          <select name="severity">
+            <option value="">All</option>
+            ${['high', 'medium', 'low'].map((value) => `<option value="${value}" ${filter.severity === value ? 'selected' : ''}>${value}</option>`).join('')}
+          </select>
+        </label>
+        <label>Assignee
+          <select name="assignee">
+            <option value="">Anyone</option>
+            <option value="${escapeHtml(state.me.user.id)}" ${filter.assignee === state.me.user.id ? 'selected' : ''}>Me</option>
+            <option value="unassigned" ${filter.assignee === 'unassigned' ? 'selected' : ''}>Unassigned</option>
+          </select>
+        </label>
+      </form>
+      <p id="issueMessage" class="muted" role="status"></p>
+    </section>
+    ${items.length ? groups.filter(([, list]) => list.length).map(([severity, list]) => `
+      <section class="panel">
+        <h2><span class="badge severity-${severity}">${severity}</span> ${list.length} issue(s)</h2>
+        <ul class="issue-list">
+          ${list.map((item) => issueRow(item, canAct)).join('')}
+        </ul>
+      </section>
+    `).join('') : '<section class="panel"><p class="empty">Nothing matches. Good.</p></section>'}
+  `;
+
+  document.querySelector('#issueFilters').addEventListener('change', (event) => {
+    const form = new FormData(event.currentTarget);
+    state.issueFilter = Object.fromEntries(['status', 'rule', 'severity', 'assignee'].map((key) => [key, String(form.get(key) || '')]));
+    renderIssues();
+  });
+  document.querySelector('#runScan')?.addEventListener('click', async () => {
+    const result = await api('/api/exceptions/scan', { method: 'POST', body: '{}' });
+    await loadData();
+    renderApp();
+    const message = document.querySelector('#issueMessage');
+    if (message) {
+      message.textContent = `Checked: ${result.detected} new, ${result.reopened} reopened, ${result.autoResolved} fixed since last check.`;
+    }
+  });
+  document.querySelectorAll('[data-issue-action]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const action = button.dataset.issueAction;
+      const body = { action };
+      if (action === 'snooze') {
+        const days = prompt('Snooze for how many days?', '7');
+        if (!days) return;
+        body.until = new Date(Date.now() + Number(days) * 86_400_000).toISOString();
+      }
+      if (action === 'resolve' || action === 'dismiss') {
+        const note = prompt(action === 'resolve' ? 'What did you do? (optional)' : 'Why is this acceptable? (optional)', '');
+        if (note === null) return;
+        body.note = note;
+      }
+      try {
+        await api(`/api/exceptions/${button.dataset.issueId}`, { method: 'PATCH', body: JSON.stringify(body) });
+        await loadData();
+        renderApp();
+      } catch (error) {
+        const message = document.querySelector('#issueMessage');
+        if (message) message.textContent = error.message;
+      }
+    });
+  });
+  document.querySelectorAll('[data-issue-open-asset]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      state.viewingAsset = await api(`/api/assets/${button.dataset.issueOpenAsset}`);
+      state.tab = 'assets';
+      renderApp();
+    });
+  });
+  document.querySelectorAll('[data-issue-open-person]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      state.viewingPerson = await api(`/api/people/${button.dataset.issueOpenPerson}/overview`);
+      state.tab = 'people';
+      renderApp();
+    });
+  });
+}
+
+function issueRow(item, canAct) {
+  const details = item.details || {};
+  const asset = details.asset;
+  const person = details.person || details.assignedTo;
+  const subject = asset
+    ? `${asset.assetTag || asset.serialNumber}${asset.modelName ? ` · ${asset.modelName}` : ''}`
+    : (person ? `${person.name || person.email}` : '');
+  const facts = [
+    person && asset ? `${person.name || person.email}${person.status === 'inactive' ? ' (disabled)' : ''}` : '',
+    details.reportedUserEmail ? `MDM user: ${details.reportedUserEmail}` : '',
+    details.daysSinceSeen !== undefined ? `last check-in ${details.daysSinceSeen} days ago` : '',
+    details.reason === 'same_external_id' ? `same MDM id ${details.externalId} on ${details.assets.length} records` : '',
+    details.reason === 'same_person_same_category' ? `${details.assets.length} × ${details.category} on one person` : '',
+    item.assigneeName ? `assigned to ${item.assigneeName}` : '',
+    item.status === 'snoozed' && item.snoozeUntil ? `snoozed until ${String(item.snoozeUntil).slice(0, 10)}` : '',
+    item.resolution ? `closed: ${item.resolution}` : ''
+  ].filter(Boolean);
+  const open = item.status === 'open' || item.status === 'snoozed';
+  return `
+    <li class="issue">
+      <div>
+        <strong>${escapeHtml(item.ruleLabel)}</strong>
+        <span class="muted">${escapeHtml(subject)}</span>
+        ${facts.length ? `<p class="muted">${facts.map(escapeHtml).join(' · ')}</p>` : ''}
+        ${details.suggestion && open ? `<p class="issue-next">Next: ${escapeHtml(details.suggestion)}</p>` : ''}
+        <p class="muted">First seen ${escapeHtml(relativeTime(item.firstDetectedAt))}</p>
+      </div>
+      <div class="row-actions">
+        ${asset ? `<button type="button" data-issue-open-asset="${escapeHtml(asset.id)}">Device</button>` : ''}
+        ${person?.id ? `<button type="button" data-issue-open-person="${escapeHtml(person.id)}">Person</button>` : ''}
+        ${canAct && open ? `
+          ${item.assigneeUserId === state.me.user.id ? '' : `<button type="button" data-issue-action="assign" data-issue-id="${item.id}">Assign to me</button>`}
+          <button type="button" data-issue-action="snooze" data-issue-id="${item.id}">Snooze</button>
+          <button type="button" class="primary" data-issue-action="resolve" data-issue-id="${item.id}">Resolve</button>
+          <button type="button" class="ghost" data-issue-action="dismiss" data-issue-id="${item.id}">Dismiss</button>
+        ` : ''}
+        ${canAct && !open ? `<button type="button" data-issue-action="reopen" data-issue-id="${item.id}">Reopen</button>` : ''}
+      </div>
+    </li>
+  `;
+}
+
+function presenceLine(presence = {}, { lastSeenAt = null, personStatus = '' } = {}) {
+  const parts = [];
+  for (const [source, entry] of Object.entries(presence)) {
+    const label = source.charAt(0).toUpperCase() + source.slice(1);
+    if (entry && entry.enabled !== undefined) {
+      parts.push(`${label}: ${entry.enabled ? 'Active' : 'Disabled'}`);
+    } else {
+      parts.push(`${label}: seen ${relativeTime(entry?.seenAt || entry?.importedAt)}`);
+    }
+  }
+  if (personStatus && !Object.values(presence).some((entry) => entry?.enabled !== undefined)) {
+    parts.push(`Inventory: ${personStatus}`);
+  }
+  if (lastSeenAt) parts.push(`Last check-in: ${relativeTime(lastSeenAt)}`);
+  return parts.length ? parts.join(' · ') : 'Not seen in any connected source yet.';
+}
+
+function exceptionsListHtml(list = []) {
+  if (!list.length) return '<p class="muted">No open issues.</p>';
+  return `<ul class="issue-list compact">${list.map((item) => `
+    <li><span class="badge severity-${escapeHtml(item.severity)}">${escapeHtml(item.severity)}</span>
+      ${escapeHtml(item.ruleLabel)}${item.details?.suggestion ? ` <span class="muted">— ${escapeHtml(item.details.suggestion)}</span>` : ''}</li>
+  `).join('')}</ul>`;
+}
+
+function relativeTime(iso) {
+  const time = Date.parse(iso || '');
+  if (!Number.isFinite(time)) return 'never';
+  const minutes = Math.round((Date.now() - time) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)} days ago`;
 }
 
 function metricCard(label, value) {
@@ -652,7 +899,18 @@ function renderPeople() {
         </table>
       </div>
     </section>
+    ${state.viewingPerson ? personOverviewPanel(state.viewingPerson) : ''}
   `;
+  document.querySelectorAll('[data-view-person]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      state.viewingPerson = await api(`/api/people/${button.dataset.viewPerson}/overview`);
+      renderApp();
+    });
+  });
+  document.querySelector('#closePersonOverview')?.addEventListener('click', () => {
+    state.viewingPerson = null;
+    renderApp();
+  });
   document.querySelector('#personForm')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const body = Object.fromEntries(new FormData(event.currentTarget).entries());
@@ -719,6 +977,40 @@ function renderPeople() {
   });
 }
 
+function personOverviewPanel(overview) {
+  const { person, assets, exceptions } = overview;
+  return `
+    <section class="panel">
+      <div class="page-head">
+        <div>
+          <h2>${escapeHtml(`${person.firstName} ${person.lastName}`)}</h2>
+          <p class="lede">${escapeHtml([person.email, person.department, person.manager ? `manager ${person.manager}` : ''].filter(Boolean).join(' · '))}</p>
+        </div>
+        <button type="button" id="closePersonOverview" class="ghost">Close</button>
+      </div>
+      <p class="presence">${escapeHtml(presenceLine(person.sourcePresence, { personStatus: person.status }))}</p>
+      <h3>Devices</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Device</th><th>Serial</th><th>Status</th><th>Sources</th></tr></thead>
+          <tbody>
+            ${assets.map((asset) => `
+              <tr>
+                <td>${escapeHtml(asset.modelName || asset.assetTag)}</td>
+                <td>${escapeHtml(asset.serialNumber)}</td>
+                <td>${escapeHtml(statusLabel(asset.status))}</td>
+                <td>${escapeHtml(presenceLine(asset.sourcePresence, { lastSeenAt: asset.lastSeenAt }))}</td>
+              </tr>
+            `).join('') || '<tr><td colspan="4" class="empty">No devices assigned.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      <h3>Open issues</h3>
+      ${exceptionsListHtml(exceptions)}
+    </section>
+  `;
+}
+
 function peopleOptions(selectedId = '') {
   return state.people.map((person) => `
     <option value="${person.id}" ${person.id === selectedId ? 'selected' : ''}>
@@ -734,7 +1026,8 @@ function personRow(person) {
       <td>${escapeHtml(person.email || '')}</td>
       <td>${escapeHtml(person.department || '')}</td>
       <td><span class="badge ${escapeHtml(person.status)}">${escapeHtml(person.status)}</span></td>
-      <td class="row-actions">${canWrite() ? `
+      <td class="row-actions">
+        <button type="button" data-view-person="${person.id}">View</button>${canWrite() ? `
         <button type="button" data-edit-person="${person.id}">Edit</button>
         <button type="button" class="danger" data-del-person="${person.id}">Delete</button>
       ` : ''}</td>
@@ -1103,6 +1396,10 @@ function assetDetailPanel(asset) {
           <div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd></div>
         `).join('')}
       </dl>
+      <h3>Sources</h3>
+      <p class="presence">${escapeHtml(presenceLine(asset.sourcePresence, { lastSeenAt: asset.lastSeenAt }))}</p>
+      <h3>Open issues</h3>
+      ${exceptionsListHtml(asset.exceptions)}
       <h3>Identity in other systems</h3>
       ${externalIds.length
         ? `<dl class="detail-grid">${externalIds.map(([key, value]) => `
@@ -1664,6 +1961,10 @@ async function renderSettings() {
   const target = document.querySelector('#tabContent');
   if (!target || state.tab !== 'settings') return;
 
+  if (state.settingsTab === 'rules' || state.settingsTab === 'connections') {
+    return renderSettingsIntegrations(canEdit);
+  }
+
   let settings = null;
   if (state.settingsTab === 'import-rules') {
     settings = await api('/api/settings');
@@ -1675,7 +1976,9 @@ async function renderSettings() {
     ['options', 'Options'],
     ['custom-fields', 'Custom fields'],
     ['import-rules', 'Import rules'],
-    ['import-profiles', 'Import profiles']
+    ['import-profiles', 'Import profiles'],
+    ['rules', 'Issue rules'],
+    ['connections', 'Connections']
   ];
 
   target.innerHTML = `
@@ -1712,6 +2015,150 @@ async function renderSettings() {
   wireSettingsCustomFields(canEdit);
   wireSettingsImportRules(canEdit);
   wireSettingsImportProfiles(canEdit);
+}
+
+async function renderSettingsIntegrations(canEdit) {
+  const target = document.querySelector('#tabContent');
+  const rules = state.settingsTab === 'rules';
+  const data = rules ? await api('/api/exceptions/rules') : await api('/api/connections');
+  if (state.tab !== 'settings') return;
+  const tabs = [
+    ['catalog', 'Catalog'], ['options', 'Options'], ['custom-fields', 'Custom fields'],
+    ['import-rules', 'Import rules'], ['import-profiles', 'Import profiles'],
+    ['rules', 'Issue rules'], ['connections', 'Connections']
+  ];
+  target.innerHTML = `
+    <section class="panel">
+      <div class="page-head"><div><h2>Settings</h2></div></div>
+      <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+        ${tabs.map(([id, label]) => `
+          <button type="button" role="tab" data-settings-tab="${id}" class="${state.settingsTab === id ? 'active' : ''}"
+            aria-selected="${state.settingsTab === id ? 'true' : 'false'}">${label}</button>
+        `).join('')}
+      </div>
+    </section>
+    ${rules ? settingsRulesPanel(data, canEdit) : settingsConnectionsPanel(data, canEdit)}
+  `;
+  document.querySelectorAll('[data-settings-tab]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.settingsTab = button.dataset.settingsTab;
+      renderApp();
+    });
+  });
+  const message = document.querySelector('#integrationMessage');
+  document.querySelector('#rulesForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const body = {
+      staleDays: Number(form.get('staleDays')),
+      duplicateSameCategoryThreshold: Number(form.get('duplicateSameCategoryThreshold')),
+      enabled: Object.fromEntries(data.rules.map((rule) => [rule.key, form.get(`rule:${rule.key}`) === 'on']))
+    };
+    try {
+      const result = await api('/api/exceptions/rules', { method: 'PUT', body: JSON.stringify(body) });
+      await loadData();
+      message.textContent = `Saved. ${result.scan.open} open issue(s) after re-check.`;
+    } catch (error) {
+      message.textContent = error.message;
+    }
+  });
+  document.querySelectorAll('[data-connect]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      try {
+        await api(`/api/connections/${button.dataset.connect}`, { method: 'PUT', body: '{}' });
+        renderSettingsIntegrations(canEdit);
+      } catch (error) {
+        message.textContent = error.message;
+      }
+    });
+  });
+  document.querySelectorAll('[data-disconnect]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (!confirm('Disconnect this source? Imported data stays.')) return;
+      await api(`/api/connections/${button.dataset.disconnect}`, { method: 'DELETE' });
+      renderSettingsIntegrations(canEdit);
+    });
+  });
+  document.querySelectorAll('[data-sync]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        const result = await api(`/api/connections/${button.dataset.sync}/sync`, { method: 'POST', body: '{}' });
+        await loadData();
+        await renderSettingsIntegrations(canEdit);
+        const note = document.querySelector('#integrationMessage');
+        if (note) {
+          note.textContent = `Synced. Users ${result.users?.created || 0} new / ${result.users?.updated || 0} updated; devices ${result.devices?.created || 0} new / ${result.devices?.updated || 0} updated; ${result.exceptions?.open ?? 0} open issue(s).`;
+        }
+      } catch (error) {
+        message.textContent = error.message;
+        button.disabled = false;
+      }
+    });
+  });
+}
+
+function settingsRulesPanel(data, canEdit) {
+  const { rules, settings } = data;
+  return `
+    <section class="panel">
+      <h2>Issue rules</h2>
+      <p class="lede">Which checks run after every import or sync. Changing them re-checks immediately.</p>
+      <form id="rulesForm" class="grid">
+        <label>Stale after (days)
+          <input name="staleDays" type="number" min="1" value="${escapeHtml(settings.staleDays)}" ${canEdit ? '' : 'disabled'}>
+        </label>
+        <label>Flag a person with this many devices of one category
+          <input name="duplicateSameCategoryThreshold" type="number" min="2" value="${escapeHtml(settings.duplicateSameCategoryThreshold)}" ${canEdit ? '' : 'disabled'}>
+        </label>
+        <div class="span-all rule-list">
+          ${rules.map((rule) => `
+            <label class="checkbox">
+              <input type="checkbox" name="rule:${escapeHtml(rule.key)}" ${settings.enabled[rule.key] ? 'checked' : ''} ${canEdit ? '' : 'disabled'}>
+              <span><strong>${escapeHtml(rule.label)}</strong> <span class="badge severity-${escapeHtml(rule.severity)}">${escapeHtml(rule.severity)}</span><br>
+              <span class="muted">${escapeHtml(rule.suggestion)}</span></span>
+            </label>
+          `).join('')}
+        </div>
+        ${canEdit ? '<div class="actions span-all"><button class="primary" type="submit">Save rules</button></div>' : ''}
+      </form>
+      <p id="integrationMessage" class="muted" role="status"></p>
+    </section>
+  `;
+}
+
+function settingsConnectionsPanel(data, canEdit) {
+  const canSync = canWrite();
+  return `
+    <section class="panel">
+      <h2>Connections</h2>
+      <p class="lede">Read-only connections to your directory and MDM. The app never asks for admin passwords and never changes Entra or Jamf.</p>
+      <p id="integrationMessage" class="muted" role="status"></p>
+      <ul class="issue-list">
+        ${data.providers.map((provider) => {
+          const connection = provider.connection;
+          return `
+            <li class="issue">
+              <div>
+                <strong>${escapeHtml(provider.label)}</strong>
+                <span class="muted">${escapeHtml(provider.datasets.join(' + '))}</span>
+                ${provider.live
+                  ? `<p class="muted">Permissions: ${escapeHtml(provider.requiredScopes.join(', '))}. ${escapeHtml(provider.auth)}</p>
+                     <p class="muted">Live sync is coming soon; use CSV import meanwhile.</p>`
+                  : '<p class="muted">Fills this organization with sample Entra users and Jamf Macs so every issue type shows up.</p>'}
+                ${connection ? `<p class="muted">Status: ${escapeHtml(connection.status)}${connection.lastSyncAt ? ` · last sync ${escapeHtml(relativeTime(connection.lastSyncAt))}` : ''}${connection.lastError ? ` · ${escapeHtml(connection.lastError)}` : ''}</p>` : ''}
+              </div>
+              <div class="row-actions">
+                ${!provider.live && canEdit && !connection ? `<button type="button" data-connect="${escapeHtml(provider.key)}">Connect</button>` : ''}
+                ${!provider.live && connection && canSync ? `<button type="button" class="primary" data-sync="${escapeHtml(provider.key)}">Sync now</button>` : ''}
+                ${connection && canEdit ? `<button type="button" class="ghost" data-disconnect="${escapeHtml(provider.key)}">Disconnect</button>` : ''}
+              </div>
+            </li>
+          `;
+        }).join('')}
+      </ul>
+    </section>
+  `;
 }
 
 function renderSettingsCatalog(canEdit) {
