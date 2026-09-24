@@ -1,3 +1,4 @@
+import { entraProvider } from './entra.js';
 import { mockProvider } from './mock.js';
 
 /**
@@ -5,21 +6,6 @@ import { mockProvider } from './mock.js';
  * so a live sync goes through exactly the same preview, apply and exception
  * pipeline as an uploaded file.
  */
-const entraProvider = {
-  key: 'entra',
-  label: 'Microsoft Entra ID',
-  live: true,
-  datasets: ['users'],
-  // Least privilege: read users only. Device.Read.All is added only if a
-  // device-level rule needs Entra device objects.
-  requiredScopes: ['User.Read.All'],
-  auth: 'OAuth 2.0 admin consent (client credentials); no passwords are stored.',
-  credentialFields: ['tenantId', 'clientId', 'clientSecret'],
-  async fetch() {
-    throw notImplemented('Microsoft Entra');
-  }
-};
-
 const jamfProvider = {
   key: 'jamf',
   label: 'Jamf Pro',

@@ -2072,6 +2072,32 @@ async function renderSettingsIntegrations(canEdit) {
       }
     });
   });
+  document.querySelectorAll('[data-credentials-form]').forEach((form) => {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const providerKey = form.dataset.credentialsForm;
+      const body = Object.fromEntries(new FormData(form).entries());
+      const credentials = {};
+      for (const [key, value] of Object.entries(body)) {
+        const trimmed = String(value || '').trim();
+        if (trimmed) credentials[key] = trimmed;
+      }
+      if (!Object.keys(credentials).length) {
+        message.textContent = 'Enter at least one credential field.';
+        return;
+      }
+      try {
+        await api(`/api/connections/${providerKey}`, {
+          method: 'PUT',
+          body: JSON.stringify({ credentials })
+        });
+        message.textContent = 'Credentials saved.';
+        await renderSettingsIntegrations(canEdit);
+      } catch (error) {
+        message.textContent = error.message;
+      }
+    });
+  });
   document.querySelectorAll('[data-disconnect]').forEach((button) => {
     button.addEventListener('click', async () => {
       if (!confirm('Disconnect this source? Imported data stays.')) return;
@@ -2129,28 +2155,36 @@ function settingsRulesPanel(data, canEdit) {
 
 function settingsConnectionsPanel(data, canEdit) {
   const canSync = canWrite();
+  const canStore = Boolean(data.canStoreCredentials);
   return `
     <section class="panel">
       <h2>Connections</h2>
       <p class="lede">Read-only connections to your directory and MDM. The app never asks for admin passwords and never changes Entra or Jamf.</p>
+      ${!canStore && canEdit ? '<p class="muted">Set <code>SAAS_CONNECTOR_KEY</code> on the server before saving live connector credentials.</p>' : ''}
       <p id="integrationMessage" class="muted" role="status"></p>
       <ul class="issue-list">
         ${data.providers.map((provider) => {
           const connection = provider.connection;
+          const hasCredentials = Boolean(connection?.hasCredentials);
+          const canLiveSync = provider.live && hasCredentials && canSync;
+          const showCredentialForm = provider.live && canEdit && canStore && provider.credentialFields?.length;
           return `
-            <li class="issue">
+            <li class="issue connection-card">
               <div>
                 <strong>${escapeHtml(provider.label)}</strong>
                 <span class="muted">${escapeHtml(provider.datasets.join(' + '))}</span>
                 ${provider.live
                   ? `<p class="muted">Permissions: ${escapeHtml(provider.requiredScopes.join(', '))}. ${escapeHtml(provider.auth)}</p>
-                     <p class="muted">Live sync is coming soon; use CSV import meanwhile.</p>`
+                     ${provider.key === 'jamf' ? '<p class="muted">Live Jamf sync is not available yet; use CSV import meanwhile.</p>' : ''}`
                   : '<p class="muted">Fills this organization with sample Entra users and Jamf Macs so every issue type shows up.</p>'}
-                ${connection ? `<p class="muted">Status: ${escapeHtml(connection.status)}${connection.lastSyncAt ? ` · last sync ${escapeHtml(relativeTime(connection.lastSyncAt))}` : ''}${connection.lastError ? ` · ${escapeHtml(connection.lastError)}` : ''}</p>` : ''}
+                ${connection ? `<p class="muted">Status: ${escapeHtml(connection.status)}${hasCredentials ? ' · credentials saved' : ''}${connection.lastSyncAt ? ` · last sync ${escapeHtml(relativeTime(connection.lastSyncAt))}` : ''}${connection.lastError ? ` · ${escapeHtml(connection.lastError)}` : ''}</p>` : ''}
+                ${showCredentialForm ? connectionCredentialsForm(provider, hasCredentials) : ''}
               </div>
               <div class="row-actions">
                 ${!provider.live && canEdit && !connection ? `<button type="button" data-connect="${escapeHtml(provider.key)}">Connect</button>` : ''}
-                ${!provider.live && connection && canSync ? `<button type="button" class="primary" data-sync="${escapeHtml(provider.key)}">Sync now</button>` : ''}
+                ${(!provider.live && connection && canSync) || canLiveSync
+                  ? `<button type="button" class="primary" data-sync="${escapeHtml(provider.key)}">Sync now</button>`
+                  : ''}
                 ${connection && canEdit ? `<button type="button" class="ghost" data-disconnect="${escapeHtml(provider.key)}">Disconnect</button>` : ''}
               </div>
             </li>
@@ -2158,6 +2192,30 @@ function settingsConnectionsPanel(data, canEdit) {
         }).join('')}
       </ul>
     </section>
+  `;
+}
+
+function connectionCredentialsForm(provider, hasCredentials) {
+  const fields = provider.credentialFields || [];
+  const labels = {
+    tenantId: 'Directory (tenant) ID',
+    clientId: 'Application (client) ID',
+    clientSecret: 'Client secret',
+    baseUrl: 'Jamf base URL',
+  };
+  return `
+    <form class="connection-credentials grid" data-credentials-form="${escapeHtml(provider.key)}">
+      ${fields.map((field) => `
+        <label class="${field === 'clientSecret' || field === 'baseUrl' ? 'span-all' : ''}">${escapeHtml(labels[field] || field)}
+          <input name="${escapeHtml(field)}" ${field === 'clientSecret' ? 'type="password" autocomplete="off"' : 'type="text" autocomplete="off"'}
+            placeholder="${hasCredentials && field === 'clientSecret' ? 'Leave blank to keep current secret' : ''}"
+            ${field === 'clientSecret' && hasCredentials ? '' : 'required'}>
+        </label>
+      `).join('')}
+      <div class="actions span-all">
+        <button class="primary" type="submit">${hasCredentials ? 'Update credentials' : 'Save credentials'}</button>
+      </div>
+    </form>
   `;
 }
 

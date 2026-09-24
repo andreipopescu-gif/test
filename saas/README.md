@@ -32,10 +32,11 @@ stays dismissed. Admins tune thresholds and switch rules off in
 
 Connections (**Settings → Connections**) share one interface: a provider
 returns records shaped like its CSV export, and they go through the same
-preview and apply as an upload. Today only the demo provider syncs; Microsoft
-Entra (`User.Read.All`, admin consent) and Jamf Pro (API client with a
-read-only role) are declared with their minimum permissions and will sync once
-a test tenant is available. Credentials are encrypted with
+preview and apply as an upload. **Microsoft Entra ID** syncs live with
+application permission `User.Read.All` (admin consent) using client
+credentials. Jamf Pro is declared with its minimum read-only scopes but still
+uses CSV until a test instance is wired. The demo provider fills sample Entra
++ Jamf data for issue demos. Credentials are encrypted with
 `SAAS_CONNECTOR_KEY`.
 
 `npm run seed:demo` fills an organization with demo Entra users and Jamf Macs
@@ -79,8 +80,8 @@ so every rule has an example.
 
 - Invoice PDF import, PV DOCX handover documents, JSON backup/restore
 - Microsoft/Google SSO
-- Live Entra / Jamf / Intune sync (the connector layer and demo provider are
-  in place; CSV/ZIP import covers the same data meanwhile)
+- Live Jamf / Intune sync (Entra Graph sync is live; Jamf and Intune still use
+  CSV/ZIP import for the same pipeline)
 - Actions that change Entra or Jamf (lock, revoke, reassign) — planned behind
   explicit confirmation
 - MFA, licence and compliance checks (need the live connectors)

@@ -1478,12 +1478,23 @@ async function saveConnection(session, providerKey, input) {
     const unknown = Object.keys(credentials).filter((field) => !provider.credentialFields.includes(field));
     if (unknown.length) throw badRequest(`Unknown credential fields: ${unknown.join(', ')}`);
   }
-  const encrypted = credentials ? encryptCredentials(credentials) : null;
-  const status = provider.live ? (encrypted ? 'configured' : 'pending') : 'connected';
   const existing = await db.get(
     'SELECT id, encrypted_credentials AS "encrypted" FROM connections WHERE organization_id = ? AND provider = ?',
     [session.organizationId, provider.key]
   );
+  let encrypted = null;
+  if (credentials) {
+    const previous = existing?.encrypted ? decryptCredentials(existing.encrypted) : {};
+    const merged = { ...previous };
+    for (const [field, value] of Object.entries(credentials)) {
+      const trimmed = String(value ?? '').trim();
+      if (trimmed) merged[field] = trimmed;
+    }
+    const missing = provider.credentialFields.filter((field) => !String(merged[field] || '').trim());
+    if (missing.length) throw badRequest(`Missing credential fields: ${missing.join(', ')}`);
+    encrypted = encryptCredentials(merged);
+  }
+  const status = provider.live ? (encrypted || existing?.encrypted ? 'configured' : 'pending') : 'connected';
   if (existing) {
     await db.run(`
       UPDATE connections
