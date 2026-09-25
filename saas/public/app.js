@@ -675,6 +675,9 @@ async function renderDashboard() {
       renderApp();
     });
   });
+  document.querySelectorAll('[data-open-help]').forEach((button) => {
+    button.addEventListener('click', () => openHelpWalkthrough());
+  });
 }
 
 function issuesSummaryPanel(summary) {
