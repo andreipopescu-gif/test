@@ -892,25 +892,22 @@ function renderPeople() {
         <table>
           <thead><tr><th>Name</th><th>Email</th><th>Department</th><th>Status</th><th></th></tr></thead>
           <tbody>
-            ${state.people.map((person) => (
-              person.id === state.editingPerson ? personEditRow(person) : personRow(person)
-            )).join('') || '<tr><td colspan="5" class="empty">No people yet.</td></tr>'}
+            ${state.people.map((person) => personRow(person)).join('') || '<tr><td colspan="5" class="empty">No people yet.</td></tr>'}
           </tbody>
         </table>
       </div>
     </section>
-    ${state.viewingPerson ? personOverviewPanel(state.viewingPerson) : ''}
+    ${state.viewingPerson ? personOverviewModal(state.viewingPerson) : ''}
+    ${state.editingPerson ? personEditModal(state.people.find((person) => person.id === state.editingPerson)) : ''}
   `;
   document.querySelectorAll('[data-view-person]').forEach((button) => {
     button.addEventListener('click', async () => {
+      state.editingPerson = '';
       state.viewingPerson = await api(`/api/people/${button.dataset.viewPerson}/overview`);
       renderApp();
     });
   });
-  document.querySelector('#closePersonOverview')?.addEventListener('click', () => {
-    state.viewingPerson = null;
-    renderApp();
-  });
+  bindPersonModalChrome();
   document.querySelector('#personForm')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const body = Object.fromEntries(new FormData(event.currentTarget).entries());
@@ -921,6 +918,7 @@ function renderPeople() {
   });
   document.querySelectorAll('[data-edit-person]').forEach((button) => {
     button.addEventListener('click', () => {
+      state.viewingPerson = null;
       state.editingPerson = button.dataset.editPerson;
       renderApp();
     });
@@ -946,13 +944,12 @@ function renderPeople() {
     await loadData();
     renderApp();
   });
-  document.querySelector('#personEditCancel')?.addEventListener('click', () => {
-    state.editingPerson = '';
-    renderApp();
-  });
   document.querySelectorAll('[data-del-person]').forEach((button) => {
     button.addEventListener('click', async () => {
+      if (!confirm('Delete this person? Devices stay in inventory but become unassigned.')) return;
       await api(`/api/people/${button.dataset.delPerson}`, { method: 'DELETE' });
+      if (state.viewingPerson?.person?.id === button.dataset.delPerson) state.viewingPerson = null;
+      if (state.editingPerson === button.dataset.delPerson) state.editingPerson = '';
       await loadData();
       renderApp();
     });
@@ -977,37 +974,63 @@ function renderPeople() {
   });
 }
 
-function personOverviewPanel(overview) {
+function bindPersonModalChrome() {
+  const closeView = () => {
+    state.viewingPerson = null;
+    renderApp();
+  };
+  const closeEdit = () => {
+    state.editingPerson = '';
+    renderApp();
+  };
+  document.querySelectorAll('[data-close-person-view]').forEach((button) => {
+    button.addEventListener('click', closeView);
+  });
+  document.querySelectorAll('[data-close-person-edit]').forEach((button) => {
+    button.addEventListener('click', closeEdit);
+  });
+  document.querySelectorAll('[data-modal-dismiss]').forEach((node) => {
+    node.addEventListener('click', (event) => {
+      if (event.target !== node) return;
+      if (node.dataset.modalDismiss === 'view') closeView();
+      if (node.dataset.modalDismiss === 'edit') closeEdit();
+    });
+  });
+}
+
+function personOverviewModal(overview) {
   const { person, assets, exceptions } = overview;
   return `
-    <section class="panel">
-      <div class="page-head">
-        <div>
-          <h2>${escapeHtml(`${person.firstName} ${person.lastName}`)}</h2>
-          <p class="lede">${escapeHtml([person.email, person.department, person.manager ? `manager ${person.manager}` : ''].filter(Boolean).join(' · '))}</p>
+    <div class="modal-backdrop" data-modal-dismiss="view" role="presentation">
+      <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="personViewTitle">
+        <div class="page-head">
+          <div>
+            <h2 id="personViewTitle">${escapeHtml(`${person.firstName} ${person.lastName}`)}</h2>
+            <p class="lede">${escapeHtml([person.email, person.department, person.manager ? `manager ${person.manager}` : ''].filter(Boolean).join(' · '))}</p>
+          </div>
+          <button type="button" data-close-person-view class="ghost">Close</button>
         </div>
-        <button type="button" id="closePersonOverview" class="ghost">Close</button>
+        <p class="presence ${person.status === 'inactive' ? 'presence-warn' : ''}">${escapeHtml(presenceLine(person.sourcePresence, { personStatus: person.status }))}</p>
+        <h3>Devices</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Device</th><th>Serial</th><th>Status</th><th>Sources</th></tr></thead>
+            <tbody>
+              ${assets.map((asset) => `
+                <tr>
+                  <td>${escapeHtml(asset.modelName || asset.assetTag)}</td>
+                  <td>${escapeHtml(asset.serialNumber)}</td>
+                  <td>${escapeHtml(statusLabel(asset.status))}</td>
+                  <td>${escapeHtml(presenceLine(asset.sourcePresence, { lastSeenAt: asset.lastSeenAt }))}</td>
+                </tr>
+              `).join('') || '<tr><td colspan="4" class="empty">No devices assigned.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+        <h3>Open issues</h3>
+        ${exceptionsListHtml(exceptions)}
       </div>
-      <p class="presence ${person.status === 'inactive' ? 'presence-warn' : ''}">${escapeHtml(presenceLine(person.sourcePresence, { personStatus: person.status }))}</p>
-      <h3>Devices</h3>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Device</th><th>Serial</th><th>Status</th><th>Sources</th></tr></thead>
-          <tbody>
-            ${assets.map((asset) => `
-              <tr>
-                <td>${escapeHtml(asset.modelName || asset.assetTag)}</td>
-                <td>${escapeHtml(asset.serialNumber)}</td>
-                <td>${escapeHtml(statusLabel(asset.status))}</td>
-                <td>${escapeHtml(presenceLine(asset.sourcePresence, { lastSeenAt: asset.lastSeenAt }))}</td>
-              </tr>
-            `).join('') || '<tr><td colspan="4" class="empty">No devices assigned.</td></tr>'}
-          </tbody>
-        </table>
-      </div>
-      <h3>Open issues</h3>
-      ${exceptionsListHtml(exceptions)}
-    </section>
+    </div>
   `;
 }
 
@@ -1035,10 +1058,18 @@ function personRow(person) {
   `;
 }
 
-function personEditRow(person) {
+function personEditModal(person) {
+  if (!person) return '';
   return `
-    <tr>
-      <td colspan="5">
+    <div class="modal-backdrop" data-modal-dismiss="edit" role="presentation">
+      <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="personEditTitle">
+        <div class="page-head">
+          <div>
+            <h2 id="personEditTitle">Edit person</h2>
+            <p class="lede">${escapeHtml(`${person.firstName} ${person.lastName}`)}${person.email ? ` · ${escapeHtml(person.email)}` : ''}</p>
+          </div>
+          <button type="button" data-close-person-edit class="ghost">Close</button>
+        </div>
         <form id="personEditForm" class="grid">
           <label>First name <input name="firstName" value="${escapeHtml(person.firstName)}" required></label>
           <label>Last name <input name="lastName" value="${escapeHtml(person.lastName)}" required></label>
@@ -1059,11 +1090,11 @@ function personEditRow(person) {
           ${customFieldsInputs('person', person.custom || person)}
           <div class="actions span-all">
             <button class="primary" type="submit">Save</button>
-            <button type="button" id="personEditCancel">Cancel</button>
+            <button type="button" data-close-person-edit>Cancel</button>
           </div>
         </form>
-      </td>
-    </tr>
+      </div>
+    </div>
   `;
 }
 
