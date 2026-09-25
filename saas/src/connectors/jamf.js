@@ -5,7 +5,8 @@
  * share the same mapper and exception rules.
  */
 
-import { clean, trimSlash } from './graph.js';
+import { clean } from './graph.js';
+import { normalizeOutboundBaseUrl } from './url-safety.js';
 
 export const jamfProvider = {
   key: 'jamf',
@@ -87,32 +88,7 @@ export function toJamfExportRow(computer, fallbackId = '') {
 }
 
 export function normalizeJamfBaseUrl(value) {
-  const raw = clean(value).replace(/\/+$/, '');
-  if (!raw) return '';
-  let url;
-  try {
-    url = new URL(raw.includes('://') ? raw : `https://${raw}`);
-  } catch {
-    const error = new Error('Jamf baseUrl must be a valid http(s) URL.');
-    error.status = 400;
-    throw error;
-  }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    const error = new Error('Jamf baseUrl must use http or https.');
-    error.status = 400;
-    throw error;
-  }
-  // Block obvious SSRF targets in production; tests use loopback over http.
-  const host = url.hostname.toLowerCase();
-  const allowInsecure = process.env.SAAS_JAMF_ALLOW_INSECURE === '1'
-    || host === '127.0.0.1'
-    || host === 'localhost';
-  if (url.protocol === 'http:' && !allowInsecure) {
-    const error = new Error('Jamf baseUrl must use https.');
-    error.status = 400;
-    throw error;
-  }
-  return trimSlash(url.toString());
+  return normalizeOutboundBaseUrl(value, { allowHttpLoopback: true, label: 'Jamf baseUrl' });
 }
 
 async function getJamfAuthHeader({ fetchImpl, baseUrl, clientId, clientSecret }) {

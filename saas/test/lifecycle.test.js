@@ -127,7 +127,7 @@ test('removing the last admin is refused, removing a member erases the account',
       email: 'guest@members.test', role: 'readonly'
     });
     const guest = await api.post('/api/invitations/accept', '', {
-      token: new URL(invitation.inviteUrl).searchParams.get('invite'),
+      token: inviteTokenFromUrl(invitation.inviteUrl),
       name: 'Guest',
       password: 'password-guest'
     });
@@ -182,7 +182,7 @@ test('a readonly member cannot update or delete', { timeout: 20_000 }, async () 
       email: 'viewer@readonly.test', role: 'readonly'
     });
     const viewer = await api.post('/api/invitations/accept', '', {
-      token: new URL(invitation.inviteUrl).searchParams.get('invite'),
+      token: inviteTokenFromUrl(invitation.inviteUrl),
       name: 'Viewer',
       password: 'password-viewer'
     });
@@ -264,6 +264,13 @@ function buildClient(baseUrl) {
       return { ...created, email, password };
     }
   };
+}
+
+function inviteTokenFromUrl(inviteUrl) {
+  const url = new URL(inviteUrl);
+  return url.searchParams.get('invite')
+    || new URLSearchParams(String(url.hash || '').replace(/^#/, '')).get('invite')
+    || '';
 }
 
 async function waitForHealth(baseUrl) {

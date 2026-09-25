@@ -66,6 +66,16 @@ import { canStoreCredentials, decryptCredentials, encryptCredentials } from './c
 import { assetsCsv, buildReportRows, reportTypes, rowsToCsv } from './reports.js';
 import { createImportPolicy } from '../../src/import/import-policy.js';
 import { isWarrantyExpiringWithinDays } from '../../src/utils/asset-model-label.js';
+import {
+  PLANS,
+  annotateImportOverage,
+  assertWithinPlan,
+  defaultTrialEndsAt,
+  listPublicPlans,
+  normalizeBillingRow,
+  paymentRequired,
+  suspendedBlocksMutation
+} from './plans.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -87,7 +97,7 @@ const allowRegistration = process.env.SAAS_ALLOW_REGISTRATION
 // Invitation links must not be built from a client-supplied Host header.
 const publicUrl = String(process.env.SAAS_PUBLIC_URL || '').trim().replace(/\/+$/, '');
 if (isProduction && !publicUrl) {
-  console.warn('SAAS_PUBLIC_URL is not set; invitation links fall back to the request Host header.');
+  throw new Error('SAAS_PUBLIC_URL is required in production so invitation links are not built from Host headers.');
 }
 // An unparseable limit must fall back to the default, not to NaN, because every
 // size comparison against NaN is false and would disable the limit entirely.
@@ -96,6 +106,8 @@ const maxUploadBytes = (Number.isFinite(maxUploadMb) && maxUploadMb > 0 ? maxUpl
 // Render puts exactly one proxy in front of us; it appends the peer address to
 // any client-supplied X-Forwarded-For, so only the trailing entries are trusted.
 const trustedProxies = Math.max(0, Number(process.env.SAAS_TRUSTED_PROXIES) || 0);
+const SESSION_COOKIE = 'saas_session';
+const SESSION_TTL_SEC = 60 * 60 * 12;
 
 const db = await openDatabase();
 const rateLimits = new Map();
@@ -148,6 +160,10 @@ async function handleApi(req, res, url) {
     return sendJson(res, await readiness());
   }
 
+  if (method === 'GET' && path === '/api/plans') {
+    return sendJson(res, { plans: listPublicPlans(), metric: 'managed_devices' });
+  }
+
   if (method === 'POST' && path === '/api/auth/register') {
     if (!allowRegistration) {
       const error = new Error('Self-service registration is disabled. Ask for an invitation.');
@@ -161,27 +177,47 @@ async function handleApi(req, res, url) {
       error.status = 403;
       throw error;
     }
-    return sendJson(res, await register(input), 201);
+    return sendAuthJson(req, res, await register(input), 201);
   }
 
   if (method === 'POST' && path === '/api/auth/login') {
     await enforceRateLimit(req, 'auth', 20, 15 * 60_000);
-    return sendJson(res, await login(await readJson(req)));
+    return sendAuthJson(req, res, await login(await readJson(req)));
   }
 
   if (method === 'POST' && path === '/api/invitations/accept') {
     await enforceRateLimit(req, 'auth', 20, 15 * 60_000);
-    return sendJson(res, await acceptInvitation(await readJson(req)));
+    return sendAuthJson(req, res, await acceptInvitation(await readJson(req)));
+  }
+
+  if (method === 'POST' && path === '/api/auth/logout') {
+    // Best-effort revoke: bump epoch so stolen Bearer copies die immediately.
+    try {
+      const session = await requireSession(req);
+      await db.run(
+        'UPDATE users SET token_epoch = COALESCE(token_epoch, 0) + 1 WHERE id = ?',
+        [session.userId]
+      );
+    } catch {
+      // Still clear the cookie even if the session was already invalid.
+    }
+    clearSessionCookie(req, res);
+    return sendJson(res, { ok: true });
   }
 
   const session = await requireSession(req);
+  await enforceBillingAccess(req, session);
 
   if (method === 'GET' && path === '/api/me') {
     return sendJson(res, await getMe(session));
   }
 
+  if (method === 'GET' && path === '/api/billing') {
+    return sendJson(res, await getBilling(session.organizationId));
+  }
+
   if (method === 'POST' && path === '/api/auth/switch-organization') {
-    return sendJson(res, await switchOrganization(session, await readJson(req)));
+    return sendAuthJson(req, res, await switchOrganization(session, await readJson(req)));
   }
 
   if (path === '/api/members' && method === 'GET') {
@@ -207,7 +243,7 @@ async function handleApi(req, res, url) {
   }
 
   if (method === 'PUT' && path === '/api/me/password') {
-    return sendJson(res, await changePassword(session, await readJson(req)));
+    return sendAuthJson(req, res, await changePassword(session, await readJson(req)));
   }
 
   if (method === 'DELETE' && path === '/api/organizations/current') {
@@ -642,9 +678,13 @@ async function handleApi(req, res, url) {
 
 async function requireSession(req) {
   const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  const bearer = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  const cookieToken = readCookie(req, SESSION_COOKIE);
+  const token = bearer || cookieToken;
+  const authSource = bearer ? 'bearer' : (cookieToken ? 'cookie' : '');
   const payload = verifyToken(token);
   if (!payload?.sub || !payload?.org) throw unauthorized();
+  assertSameOriginMutation(req, authSource);
   const membership = await db.get(`
     SELECT m.role, u.token_epoch AS "tokenEpoch"
     FROM memberships m
@@ -659,8 +699,110 @@ async function requireSession(req) {
   return {
     userId: payload.sub,
     organizationId: payload.org,
-    role: membership.role
+    role: membership.role,
+    authSource
   };
+}
+
+/**
+ * Suspended orgs stay readable (including CSV export). Mutations return 402 so
+ * the client can show billing copy instead of a generic auth failure.
+ */
+async function enforceBillingAccess(req, session) {
+  if (!suspendedBlocksMutation(req.method)) return;
+  const billing = await loadOrganizationBilling(session.organizationId);
+  if (billing.status !== 'suspended') return;
+  throw paymentRequired('Organization billing is suspended. Export and read-only access remain available.', {
+    plan: billing.plan,
+    status: billing.status,
+    deviceUsage: billing.deviceUsage,
+    deviceLimit: billing.deviceLimit
+  });
+}
+
+function sendAuthJson(req, res, payload, status = 200) {
+  if (payload?.token) setSessionCookie(req, res, payload.token);
+  return sendJson(res, payload, status);
+}
+
+function setSessionCookie(req, res, token) {
+  const parts = [
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Strict',
+    `Max-Age=${SESSION_TTL_SEC}`
+  ];
+  if (requestIsHttps(req) || publicUrl.startsWith('https://')) parts.push('Secure');
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function clearSessionCookie(req, res) {
+  const parts = [
+    `${SESSION_COOKIE}=`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Strict',
+    'Max-Age=0'
+  ];
+  if (requestIsHttps(req) || publicUrl.startsWith('https://')) parts.push('Secure');
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function readCookie(req, name) {
+  const raw = String(req.headers.cookie || '');
+  if (!raw) return '';
+  for (const part of raw.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const key = part.slice(0, idx).trim();
+    if (key !== name) continue;
+    try {
+      return decodeURIComponent(part.slice(idx + 1).trim());
+    } catch {
+      return part.slice(idx + 1).trim();
+    }
+  }
+  return '';
+}
+
+function requestIsHttps(req) {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  return forwardedProto === 'https';
+}
+
+/**
+ * Cookie sessions are auto-attached by the browser, so state-changing requests
+ * that authenticate via cookie must come from this origin. Bearer tokens are
+ * not auto-sent cross-site, so they skip this check (API/scripts/tests).
+ */
+function assertSameOriginMutation(req, authSource) {
+  if (authSource !== 'cookie') return;
+  const method = String(req.method || 'GET').toUpperCase();
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return;
+  const host = String(req.headers.host || '').toLowerCase();
+  if (!host) throw unauthorized('Cross-origin request blocked');
+  const origin = String(req.headers.origin || '').trim();
+  if (origin) {
+    let originHost = '';
+    try {
+      originHost = new URL(origin).host.toLowerCase();
+    } catch {
+      throw unauthorized('Cross-origin request blocked');
+    }
+    if (originHost !== host) throw unauthorized('Cross-origin request blocked');
+    return;
+  }
+  const referer = String(req.headers.referer || '').trim();
+  if (referer) {
+    let refererHost = '';
+    try {
+      refererHost = new URL(referer).host.toLowerCase();
+    } catch {
+      throw unauthorized('Cross-origin request blocked');
+    }
+    if (refererHost !== host) throw unauthorized('Cross-origin request blocked');
+  }
 }
 
 // Uptime probes poll readiness continuously; a short cache keeps a burst from
@@ -702,11 +844,15 @@ async function register(input) {
   const membershipId = randomUUID();
   const slug = await uniqueSlug(slugify(orgName));
 
+  const trialEndsAt = defaultTrialEndsAt(new Date(now));
+  const trialLimit = PLANS.trial.deviceLimit;
+
   await db.transaction(async (tx) => {
     await tx.run(`
-      INSERT INTO organizations (id, name, slug, created_at)
-      VALUES (?, ?, ?, ?)
-    `, [orgId, orgName, slug, now]);
+      INSERT INTO organizations (
+        id, name, slug, created_at, plan, status, device_limit, trial_ends_at, billing_email
+      ) VALUES (?, ?, ?, ?, 'trial', 'trial', ?, ?, ?)
+    `, [orgId, orgName, slug, now, trialLimit, trialEndsAt, email]);
 
     await tx.run(`
       INSERT INTO users (id, email, name, password_hash, created_at)
@@ -722,11 +868,17 @@ async function register(input) {
     throw error;
   });
 
-  const token = signToken({ sub: userId, org: orgId, role: 'admin', email, epoch: 0 });
+  const token = signToken({
+    sub: userId,
+    org: orgId,
+    role: 'admin',
+    email,
+    epoch: 0
+  }, SESSION_TTL_SEC);
   return {
     token,
     user: { id: userId, email, name },
-    organization: { id: orgId, name: orgName }
+    organization: { id: orgId, name: orgName, plan: 'trial', status: 'trial', deviceLimit: trialLimit, trialEndsAt }
   };
 }
 
@@ -762,7 +914,7 @@ async function login(input) {
     role: membership.role,
     email: user.email,
     epoch: Number(user.token_epoch || 0)
-  });
+  }, SESSION_TTL_SEC);
   return {
     token,
     user: { id: user.id, email: user.email, name: user.name },
@@ -775,12 +927,54 @@ async function getMe(session) {
   const user = await db.get('SELECT id, email, name FROM users WHERE id = ?', [session.userId]);
   const org = await db.get('SELECT id, name, slug FROM organizations WHERE id = ?', [session.organizationId]);
   if (!user || !org) throw unauthorized();
+  const billing = await getBilling(session.organizationId);
   return {
     user,
-    organization: org,
+    organization: {
+      id: org.id,
+      name: org.name,
+      slug: org.slug,
+      plan: billing.plan,
+      status: billing.status,
+      deviceLimit: billing.deviceLimit,
+      trialEndsAt: billing.trialEndsAt
+    },
     organizations: await listUserOrganizations(session.userId),
-    role: session.role
+    role: session.role,
+    billing
   };
+}
+
+async function loadOrganizationBilling(organizationId) {
+  const row = await db.get(`
+    SELECT plan, status, device_limit, trial_ends_at, billing_email
+    FROM organizations
+    WHERE id = ?
+  `, [organizationId]);
+  if (!row) throw notFound('Organization not found');
+  const billing = normalizeBillingRow(row);
+  const deviceUsage = await countManagedDevices(organizationId);
+  return { ...billing, deviceUsage };
+}
+
+async function getBilling(organizationId) {
+  const billing = await loadOrganizationBilling(organizationId);
+  return {
+    ...billing,
+    plans: listPublicPlans(),
+    metric: 'managed_devices',
+    metricLabel: 'Managed (non-retired) devices'
+  };
+}
+
+async function countManagedDevices(organizationId) {
+  const row = await db.get(`
+    SELECT COUNT(*) AS count
+    FROM assets
+    WHERE organization_id = ?
+      AND LOWER(COALESCE(status, '')) <> 'retired'
+  `, [organizationId]);
+  return Number(row?.count || 0);
 }
 
 async function listUserOrganizations(userId) {
@@ -813,7 +1007,7 @@ async function switchOrganization(session, input) {
       role: membership.role,
       email: user.email,
       epoch: Number(user.tokenEpoch || 0)
-    }),
+    }, SESSION_TTL_SEC),
     user: { id: user.id, email: user.email, name: user.name },
     organization: { id: membership.id, name: membership.name },
     role: membership.role
@@ -868,7 +1062,8 @@ async function createInvitation(session, input, req) {
     email,
     role,
     expiresAt,
-    inviteUrl: `${inviteBaseUrl(req)}/?invite=${encodeURIComponent(token)}`
+    // Fragment keeps the bearer invite token out of access logs and Referer history.
+    inviteUrl: `${inviteBaseUrl(req)}/#invite=${encodeURIComponent(token)}`
   };
 }
 
@@ -947,7 +1142,7 @@ async function acceptInvitation(input) {
       role: invitation.role,
       email: user.email,
       epoch
-    }),
+    }, SESSION_TTL_SEC),
     user: { id: user.id, email: user.email, name: user.name },
     organization: { id: invitation.organization_id, name: invitation.organization_name },
     role: invitation.role
@@ -969,7 +1164,10 @@ async function updateMemberRole(session, userId, input) {
     `, [session.organizationId])).count;
     if (Number(adminCount) <= 1) throw badRequest('Organization must keep at least one admin');
   }
-  await db.run('UPDATE memberships SET role = ? WHERE id = ?', [role, membership.id]);
+  await db.run(
+    'UPDATE memberships SET role = ? WHERE id = ? AND organization_id = ?',
+    [role, membership.id, session.organizationId]
+  );
   await addAudit(session, 'member.role_update', 'user', userId, {
     before: membership.role,
     after: role
@@ -988,14 +1186,22 @@ async function removeMember(session, userId) {
 
   const removed = await db.get('SELECT email FROM users WHERE id = ?', [userId]);
   await db.transaction(async (tx) => {
-    await tx.run('DELETE FROM memberships WHERE id = ?', [membership.id]);
+    await tx.run(
+      'DELETE FROM memberships WHERE id = ? AND organization_id = ?',
+      [membership.id, session.organizationId]
+    );
     await deleteUserWithoutOrganizations(tx, userId);
   });
   await addAudit(session, 'member.remove', 'user', userId, {
-    email: removed?.email || '',
-    role: membership.role
+    role: membership.role,
+    emailDomain: domainOf(removed?.email || '')
   });
   return { ok: true, id: userId };
+}
+
+function domainOf(email) {
+  const at = String(email).lastIndexOf('@');
+  return at >= 0 ? String(email).slice(at + 1).toLowerCase() : '';
 }
 
 async function isLastAdmin(organizationId) {
@@ -1044,7 +1250,7 @@ async function changePassword(session, input) {
       role: session.role,
       email: user.email,
       epoch
-    })
+    }, SESSION_TTL_SEC)
   };
 }
 
@@ -1562,8 +1768,10 @@ async function syncConnection(session, providerKey) {
       };
     }
     await db.run(
-      "UPDATE connections SET status = 'connected', last_sync_at = ?, last_error = NULL, updated_at = ? WHERE id = ?",
-      [now, now, row.id]
+      `UPDATE connections
+       SET status = 'connected', last_sync_at = ?, last_error = NULL, updated_at = ?
+       WHERE id = ? AND organization_id = ?`,
+      [now, now, row.id, session.organizationId]
     );
     result.exceptions = await refreshExceptions(session);
     await addAudit(session, 'connection.sync', 'connection', provider.key, {
@@ -1572,8 +1780,10 @@ async function syncConnection(session, providerKey) {
     return result;
   } catch (error) {
     await db.run(
-      "UPDATE connections SET status = 'error', last_error = ?, updated_at = ? WHERE id = ?",
-      [String(error.message || error).slice(0, 500), now, row.id]
+      `UPDATE connections
+       SET status = 'error', last_error = ?, updated_at = ?
+       WHERE id = ? AND organization_id = ?`,
+      [String(error.message || error).slice(0, 500), now, row.id, session.organizationId]
     );
     throw error;
   }
@@ -1697,6 +1907,8 @@ async function createAsset(organizationId, input) {
   const assetTag = clean(input.assetTag);
   const serialNumber = clean(input.serialNumber);
   if (!assetTag || !serialNumber) throw badRequest('assetTag and serialNumber are required');
+  const billing = await loadOrganizationBilling(organizationId);
+  assertWithinPlan(billing, billing.deviceUsage, { adding: 1 });
   const now = new Date().toISOString();
   const id = randomUUID();
   const personId = clean(input.personId) || null;
@@ -1809,7 +2021,7 @@ async function updateAsset(organizationId, id, input) {
         organizationId
       ]);
       if ((existing.person_id || null) !== personId) {
-        await closeOpenAssignment(tx, id, now, personId ? 'reassign' : 'return');
+        await closeOpenAssignment(tx, organizationId, id, now, personId ? 'reassign' : 'return');
         if (personId) await openAssignment(tx, organizationId, id, personId, now, 'manual');
       }
     });
@@ -1860,6 +2072,9 @@ async function createImportPreview(session, upload) {
   if (preview.needsMapping) {
     return preview;
   }
+
+  const billing = await loadOrganizationBilling(session.organizationId);
+  preview.summary = annotateImportOverage(preview.summary, billing, billing.deviceUsage);
 
   const saveAsProfile = clean(upload.fields.saveAsProfile);
   let profileId = preview.profileId || '';
@@ -2088,7 +2303,7 @@ async function applyImportBatch(session, input) {
         touchedAssetIds.add(existing.id);
         await recordAssetPresence(tx, session.organizationId, existing.id, source, row, now);
         if (previousPersonId !== personId) {
-          await closeOpenAssignment(tx, existing.id, now, `Import ${source}`);
+          await closeOpenAssignment(tx, session.organizationId, existing.id, now, `Import ${source}`);
           if (personId) {
             await openAssignment(tx, session.organizationId, existing.id, personId, now, source);
           }
@@ -2510,12 +2725,12 @@ async function openAssignment(tx, organizationId, assetId, personId, startedAt, 
   `, [randomUUID(), organizationId, assetId, personId, startedAt, source]);
 }
 
-async function closeOpenAssignment(tx, assetId, endedAt, endReason) {
+async function closeOpenAssignment(tx, organizationId, assetId, endedAt, endReason) {
   await tx.run(`
     UPDATE asset_assignments
     SET ended_at = ?, end_reason = ?
-    WHERE asset_id = ? AND ended_at IS NULL
-  `, [endedAt, endReason, assetId]);
+    WHERE asset_id = ? AND organization_id = ? AND ended_at IS NULL
+  `, [endedAt, endReason, assetId, organizationId]);
 }
 
 async function getOrganizationSettings(organizationId) {
@@ -2826,6 +3041,9 @@ function addSecurityHeaders(req, res) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   res.setHeader(
     'Content-Security-Policy',
     [
@@ -2835,7 +3053,9 @@ function addSecurityHeaders(req, res) {
       "font-src 'self' https://fonts.gstatic.com",
       "img-src 'self' data:",
       "connect-src 'self'",
-      "frame-ancestors 'none'"
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self'"
     ].join('; ')
   );
   const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();

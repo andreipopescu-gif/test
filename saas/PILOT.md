@@ -1,24 +1,28 @@
 # MVP pilot runbook
 
+For the **10–15 tester beta**, use:
+
+- [docs/BETA-GO-CHECKLIST.md](docs/BETA-GO-CHECKLIST.md) — internal GO / NO-GO gate  
+- [docs/BETA-TEST-PACK.md](docs/BETA-TEST-PACK.md) — hand this to testers only  
+- [docs/PRICING.md](docs/PRICING.md) — trial limits and manual invoicing  
+
 ## Automated gate
 
-Run before every pilot:
+Run before every pilot / Wave 1:
 
 ```bash
 cd saas
-npm run pilot:validate
+npm run beta:gate          # auth, SSRF/CSV, lifecycle, tenant, exceptions, import caps, billing entitlements
+npm run pilot:validate     # focused multi-tenant import isolation
 ```
 
-The gate creates two temporary organizations and verifies:
+`beta:gate` covers auth hardening, SSRF/CSV/security unit tests, lifecycle
+(password epoch, org delete, readonly deny), multi-tenant import isolation,
+exception RBAC/tenant isolation, import size caps, and plan device limits.
 
-- the same serial and asset tag can exist in both organizations;
-- a person from one organization cannot be assigned in another;
-- read-only members cannot mutate data;
-- one account can select between multiple organizations;
-- Intune import affects only organization A;
-- Jamf import affects only organization B;
-- import actions are present in the correct audit log.
-
+`pilot:validate` is the focused multi-tenant import gate: two temporary
+organizations, shared serials allowed across tenants, cross-org assign denied,
+readonly cannot mutate, Intune/Jamf imports stay isolated, audit logs scoped.
 Temporary data is deleted at the end.
 
 ## Scripted pilot environment

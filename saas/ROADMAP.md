@@ -557,14 +557,15 @@ devices, so per-seat pricing would underprice large tenants.
 
 - `organizations`: add `plan`, `status` (`trial`, `active`, `past_due`,
   `suspended`), `device_limit`, `trial_ends_at`, `billing_email`;
-- `assertWithinPlan(session)` called from `createAsset()`, `createPerson()` and
-  `applyImportBatch()`; on breach return 402 with the current count and limit,
-  and in the import case allow the apply but surface the overage in the preview
-  summary — silently truncating an import is worse than billing an overage;
-- `status = 'suspended'` makes `requireSession()` allow only `GET` requests and
-  the organization export endpoint. Never block data export for non-payment;
-- `GET /api/billing` returning plan, usage (`SELECT COUNT(*) FROM assets`),
-  limit and `trial_ends_at`; a usage banner in `saas/public/app.js`;
+- `assertWithinPlan(session)` called from `createAsset()`; on breach return
+  402 with the current count and limit. Device imports annotate overage in
+  the preview summary and still apply — silently truncating an import is
+  worse than billing an overage;
+- `status = 'suspended'` makes authenticated mutations return 402; GET and
+  the organization export endpoint stay open. Never block data export for
+  non-payment;
+- `GET /api/billing` returning plan, usage (non-retired assets), limit and
+  `trial_ends_at`; a usage banner in `saas/public/app.js`;
 - a `subscriptions` table created now but unused, so the Stripe webhook has a
   landing place;
 - price list and plan definitions in one module, not scattered constants.
@@ -572,7 +573,7 @@ devices, so per-seat pricing would underprice large tenants.
 ### Migrations
 
 ```
-version 7 (both dialects)
+version 8 (both dialects)
   ALTER TABLE organizations ADD COLUMN plan TEXT NOT NULL DEFAULT 'trial';
   ALTER TABLE organizations ADD COLUMN status TEXT NOT NULL DEFAULT 'trial';
   ALTER TABLE organizations ADD COLUMN device_limit INTEGER NOT NULL DEFAULT 50;

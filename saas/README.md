@@ -108,7 +108,7 @@ to use PostgreSQL instead.
 | `SAAS_JWT_SECRET` | none | Sign tokens; the server refuses to start without it |
 | `SAAS_ALLOW_REGISTRATION` | unset | Only `true` opens registration |
 | `SAAS_REGISTRATION_TOKEN` | empty | When set, registration also requires this token |
-| `SAAS_PUBLIC_URL` | empty | Base URL for invitation links; falls back to the Host header |
+| `SAAS_PUBLIC_URL` | empty (required in production) | Canonical HTTPS origin for invitation links |
 | `SAAS_TRUSTED_PROXIES` | `0` | Reverse proxies in front of the app; Render needs `1` |
 | `SAAS_MAX_UPLOAD_MB` | `10` | Upload size limit |
 | `SAAS_MAX_IMPORT_COLUMNS` | `256` | CSV column cap |
@@ -117,8 +117,17 @@ to use PostgreSQL instead.
 | `DATABASE_SSL` | `false` | Enable TLS for an external PostgreSQL endpoint |
 | `SAAS_CONNECTOR_KEY` | empty | Encrypts connector credentials; without it credentials cannot be saved |
 
+Sessions are stored in an **HttpOnly / SameSite=Strict** cookie (`saas_session`).
+The browser SPA does not keep the JWT in `localStorage`. Bearer tokens still
+work for scripts and tests. Cookie-authenticated mutations require a matching
+`Origin`/`Referer`. Connector GET responses return `hasCredentials` only —
+never `clientSecret`.
+
 `SAAS_JWT_SECRET` is mandatory everywhere, not only in production: a shared
 default would let anyone mint a token for any organization.
+
+`SAAS_PUBLIC_URL` is mandatory when `NODE_ENV=production` so invite links cannot
+be poisoned via the Host header.
 
 Registration is closed unless it is opened. With `NODE_ENV=production` and no
 `SAAS_ALLOW_REGISTRATION`, the only way in is `SAAS_REGISTRATION_TOKEN`; with
@@ -152,6 +161,14 @@ STAGING_URL=https://your-staging-host npm run check:staging
 
 Publishing requires access to the chosen provider account; no credentials are
 stored in this repository.
+
+## Pricing & entitlements
+
+Plans meter **managed (non-retired) devices**. Trial orgs get 14 days / 50
+devices; Starter and Team prices and limits live in `src/plans.js` and
+[docs/PRICING.md](docs/PRICING.md). There is no Stripe yet — set a customer’s
+plan with `npm run set-plan`. `GET /api/billing` returns usage; suspended orgs
+keep read/export and get 402 on writes.
 
 ## Branch workflow
 

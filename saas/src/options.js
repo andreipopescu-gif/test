@@ -161,7 +161,8 @@ export async function createCustomField(db, organizationId, entity, input) {
 
   const label = clean(input.label);
   if (!label) throw badRequest('Label is required');
-  const key = clean(input.key) || catalogKey(label);
+  const key = sanitizeFieldKey(clean(input.key) || label);
+  if (!key) throw badRequest('Key is required');
   const type = clean(input.type) || 'text';
   if (!CUSTOM_FIELD_TYPES.has(type)) throw badRequest('Invalid custom field type');
 
@@ -191,7 +192,8 @@ export async function updateCustomField(db, organizationId, fieldId, input) {
 
   const label = input.label === undefined ? existing.label : clean(input.label);
   if (!label) throw badRequest('Label is required');
-  const key = input.key === undefined ? existing.key : (clean(input.key) || catalogKey(label));
+  const key = input.key === undefined ? existing.key : sanitizeFieldKey(clean(input.key) || label);
+  if (!key) throw badRequest('Key is required');
   const type = input.type === undefined ? existing.type : clean(input.type);
   if (!CUSTOM_FIELD_TYPES.has(type)) throw badRequest('Invalid custom field type');
 
@@ -449,6 +451,13 @@ function catalogKey(value) {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
+}
+
+/** Safe custom-field keys: snake_case or a slugified label. */
+function sanitizeFieldKey(value) {
+  const cleaned = clean(value).toLowerCase();
+  if (/^[a-z][a-z0-9_]*$/.test(cleaned)) return cleaned;
+  return catalogKey(cleaned);
 }
 
 function clean(value) {

@@ -458,6 +458,29 @@ export const sqliteMigrations = [
         UNIQUE (organization_id, provider)
       );
     `
+  },
+  {
+    version: 8,
+    sql: `
+      ALTER TABLE organizations ADD COLUMN plan TEXT NOT NULL DEFAULT 'trial';
+      ALTER TABLE organizations ADD COLUMN status TEXT NOT NULL DEFAULT 'trial';
+      ALTER TABLE organizations ADD COLUMN device_limit INTEGER NOT NULL DEFAULT 50;
+      ALTER TABLE organizations ADD COLUMN trial_ends_at TEXT;
+      ALTER TABLE organizations ADD COLUMN billing_email TEXT;
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        provider_customer_id TEXT,
+        provider_subscription_id TEXT,
+        plan TEXT NOT NULL,
+        status TEXT NOT NULL,
+        current_period_end TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (provider, provider_subscription_id)
+      );
+    `
   }
 ];
 
@@ -688,6 +711,29 @@ export const postgresMigrations = [
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE (organization_id, provider)
+      );
+    `
+  },
+  {
+    version: 8,
+    sql: `
+      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'trial';
+      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'trial';
+      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS device_limit INTEGER NOT NULL DEFAULT 50;
+      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS trial_ends_at TEXT;
+      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS billing_email TEXT;
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        provider_customer_id TEXT,
+        provider_subscription_id TEXT,
+        plan TEXT NOT NULL,
+        status TEXT NOT NULL,
+        current_period_end TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (provider, provider_subscription_id)
       );
     `
   }

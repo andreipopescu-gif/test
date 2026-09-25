@@ -2,7 +2,6 @@ const app = document.querySelector('#app');
 const sessionLabel = document.querySelector('#sessionLabel');
 
 const state = {
-  token: localStorage.getItem('saas.token') || '',
   me: null,
   tab: 'dashboard',
   settingsTab: 'catalog',
@@ -26,30 +25,79 @@ const state = {
   viewingAsset: null,
   viewingPerson: null,
   exceptionsSummary: null,
+  billing: null,
+  helpOpen: false,
   issueFilter: { status: 'active', rule: '', severity: '', assignee: '' },
   assetFilter: { search: '', status: '', category: '' },
   mergeKeepId: '',
-  mergeAbsorbId: ''
+  mergeAbsorbId: '',
+  signedIn: false
 };
 
 /** Kept outside state so File can be re-posted for mapping continue. */
 let lastImportFile = null;
 
+const HELP_STORAGE_KEY = 'saas_walkthrough_v1';
+
+const HELP_STEPS = [
+  {
+    title: 'Start from Issues',
+    body: 'The product answers what needs fixing today — missing owners, disabled accounts still holding devices, stale check-ins, and Entra/MDM mismatches.'
+  },
+  {
+    title: 'People and Devices',
+    body: 'Look up who has which laptop or phone. Open a person or device for assignment history and related open issues.'
+  },
+  {
+    title: 'Bring data in',
+    body: 'Use Import for CSV (Intune, Jamf, …) or Settings → Connections for live Entra / MDM sync. Preview first, then apply.'
+  },
+  {
+    title: 'Act on an issue',
+    body: 'Assign it to yourself, snooze, or resolve with a short note. The issue closes itself when the condition clears.'
+  },
+  {
+    title: 'Plan and seats',
+    body: 'Account shows your trial or plan and managed-device usage. Invite Admin / IT / read-only under Members.'
+  }
+];
+
 boot();
 
 async function boot() {
-  const inviteToken = new URLSearchParams(location.search).get('invite');
-  if (inviteToken) return renderInvitation(inviteToken);
-  if (!state.token) return renderAuth();
+  // Legacy query invites still work once, then we strip them from the URL.
+  const inviteToken = readInviteToken();
+  if (inviteToken) {
+    clearInviteFromUrl();
+    return renderInvitation(inviteToken);
+  }
   try {
     state.me = await api('/api/me');
+    state.signedIn = true;
+    state.billing = state.me.billing || null;
     await loadData();
     renderApp();
   } catch {
-    state.token = '';
-    localStorage.removeItem('saas.token');
+    state.signedIn = false;
+    state.me = null;
+    state.billing = null;
     renderAuth();
   }
+}
+
+function readInviteToken() {
+  const hash = String(location.hash || '').replace(/^#/, '');
+  const fromHash = new URLSearchParams(hash.includes('=') ? hash : '').get('invite');
+  if (fromHash) return fromHash;
+  // One-time bridge for links generated before fragment delivery.
+  return new URLSearchParams(location.search).get('invite') || '';
+}
+
+function clearInviteFromUrl() {
+  const url = new URL(location.href);
+  url.searchParams.delete('invite');
+  url.hash = '';
+  history.replaceState({}, '', `${url.pathname}${url.search}`);
 }
 
 function setAuthMode(enabled) {
@@ -126,9 +174,10 @@ async function onLogin(event) {
 }
 
 async function acceptSession(result) {
-  state.token = result.token;
-  localStorage.setItem('saas.token', result.token);
+  // Session cookie is set by the server (HttpOnly). Never keep the JWT in JS.
+  state.signedIn = true;
   state.me = await api('/api/me');
+  state.billing = state.me.billing || null;
   history.replaceState({}, '', '/');
   await loadData();
   renderApp();
@@ -327,7 +376,7 @@ function customFieldsInputs(entity, values = {}) {
   return (state.customFields[entity] || []).map((field) => {
     const value = bag?.[field.key] ?? '';
     const req = field.required ? 'required' : '';
-    const name = `custom.${field.key}`;
+    const name = `custom.${escapeHtml(field.key)}`;
     if (field.type === 'boolean') {
       return `
         <label class="check-inline">
@@ -386,6 +435,40 @@ function catalogModelSelect(selectedId = '', { name = 'modelId', emptyLabel = '�
   `;
 }
 
+function billingBannerHtml() {
+  const billing = state.billing || state.me?.billing;
+  if (!billing) return '';
+  const usage = Number(billing.deviceUsage || 0);
+  const limit = Number(billing.deviceLimit || 0);
+  const ratio = limit > 0 ? usage / limit : 0;
+  const trialEnds = billing.trialEndsAt ? new Date(billing.trialEndsAt) : null;
+  const trialLabel = trialEnds && !Number.isNaN(trialEnds.getTime())
+    ? trialEnds.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+    : '';
+
+  let tone = '';
+  let message = '';
+  if (billing.status === 'suspended') {
+    tone = 'billing-banner--danger';
+    message = `Billing suspended · ${usage}/${limit} managed devices. Read and export still work; contact us to restore writes.`;
+  } else if (billing.status === 'past_due') {
+    tone = 'billing-banner--warn';
+    message = `Trial ended · ${usage}/${limit} managed devices on ${escapeHtml(billing.planLabel || billing.plan)}. Reply to your invoice to continue.`;
+  } else if (ratio >= 1) {
+    tone = 'billing-banner--warn';
+    message = `Device limit reached · ${usage}/${limit} managed. Imports may still apply with overage; new manual devices need a plan bump.`;
+  } else if (ratio >= 0.8 || billing.status === 'trial') {
+    tone = 'billing-banner--info';
+    message = billing.status === 'trial'
+      ? `Trial · ${usage}/${limit} managed devices${trialLabel ? ` · ends ${escapeHtml(trialLabel)}` : ''}`
+      : `${escapeHtml(billing.planLabel || billing.plan)} · ${usage}/${limit} managed devices`;
+  } else {
+    return '';
+  }
+
+  return `<div class="billing-banner ${tone}" role="status">${message}</div>`;
+}
+
 function renderApp() {
   setAuthMode(false);
   const org = state.me.organization?.name || '';
@@ -393,6 +476,7 @@ function renderApp() {
   sessionLabel.innerHTML = `<strong>${escapeHtml(org)}</strong><br>${escapeHtml(user)} · ${escapeHtml(state.me.role)}`;
   app.innerHTML = `
     <div class="app-chrome">
+      ${billingBannerHtml()}
       <div class="nav-row">
         <nav class="tabs" aria-label="Sections">
           <button type="button" data-tab="dashboard" class="${state.tab === 'dashboard' ? 'active' : ''}">Dashboard</button>
@@ -417,10 +501,12 @@ function renderApp() {
               `).join('')}
             </select>
           ` : ''}
+          <button type="button" id="openHelp" class="ghost">Help</button>
           <button type="button" id="logout" class="ghost">Log out</button>
         </div>
       </div>
       <div id="tabContent" class="section-stack"></div>
+      ${state.helpOpen ? helpWalkthroughHtml() : ''}
     </div>
   `;
   document.querySelectorAll('[data-tab]').forEach((button) => {
@@ -430,9 +516,16 @@ function renderApp() {
     });
   });
   document.addEventListener('click', onTabJump);
-  document.querySelector('#logout').addEventListener('click', () => {
-    state.token = '';
-    localStorage.removeItem('saas.token');
+  document.querySelector('#openHelp')?.addEventListener('click', () => openHelpWalkthrough());
+  document.querySelector('#logout').addEventListener('click', async () => {
+    try {
+      await api('/api/auth/logout', { method: 'POST', body: '{}' });
+    } catch {
+      // Clear local UI even if the network call failed.
+    }
+    state.signedIn = false;
+    state.me = null;
+    state.helpOpen = false;
     renderAuth();
   });
   document.querySelector('#organizationSwitch')?.addEventListener('change', async (event) => {
@@ -442,6 +535,7 @@ function renderApp() {
     });
     await acceptSession(result);
   });
+  if (state.helpOpen) bindHelpWalkthrough();
   if (state.tab === 'dashboard') renderDashboard();
   else if (state.tab === 'issues') renderIssues();
   else if (state.tab === 'people') renderPeople();
@@ -451,6 +545,103 @@ function renderApp() {
   else if (state.tab === 'settings') renderSettings();
   else if (state.tab === 'account') renderAccount();
   else renderMembers();
+  maybeOfferFirstRunHelp();
+}
+
+function helpWalkthroughHtml() {
+  return `
+    <div class="modal-backdrop" data-modal-dismiss="help" role="presentation">
+      <div class="modal-dialog help-dialog" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+        <div class="page-head">
+          <div>
+            <h2 id="helpTitle">Quick tour</h2>
+            <p class="lede">Five minutes to know where to look. Reopen anytime from Help.</p>
+          </div>
+          <button type="button" class="ghost" data-close-help>Close</button>
+        </div>
+        <ol class="help-steps">
+          ${HELP_STEPS.map((step, index) => `
+            <li>
+              <span class="help-step-num" aria-hidden="true">${index + 1}</span>
+              <div>
+                <strong>${escapeHtml(step.title)}</strong>
+                <p>${escapeHtml(step.body)}</p>
+              </div>
+            </li>
+          `).join('')}
+        </ol>
+        <div class="actions help-actions">
+          <button type="button" class="primary" data-finish-help>Got it</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function openHelpWalkthrough() {
+  state.helpOpen = true;
+  renderApp();
+}
+
+function closeHelpWalkthrough({ remember = true } = {}) {
+  state.helpOpen = false;
+  if (helpKeyAbort) {
+    helpKeyAbort.abort();
+    helpKeyAbort = null;
+  }
+  if (remember) {
+    try {
+      localStorage.setItem(HELP_STORAGE_KEY, '1');
+    } catch {
+      // Private mode may block storage; ignore.
+    }
+  }
+  renderApp();
+}
+
+let helpKeyAbort = null;
+
+function bindHelpWalkthrough() {
+  const finish = () => closeHelpWalkthrough({ remember: true });
+  document.querySelectorAll('[data-close-help], [data-finish-help]').forEach((node) => {
+    node.addEventListener('click', (event) => {
+      event.preventDefault();
+      finish();
+    });
+  });
+  document.querySelector('[data-modal-dismiss="help"]')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) finish();
+  });
+  if (helpKeyAbort) helpKeyAbort.abort();
+  helpKeyAbort = new AbortController();
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    finish();
+  }, { signal: helpKeyAbort.signal });
+}
+
+function maybeOfferFirstRunHelp() {
+  if (state.helpOpen || !state.signedIn) return;
+  let seen = false;
+  try {
+    seen = localStorage.getItem(HELP_STORAGE_KEY) === '1';
+  } catch {
+    seen = true;
+  }
+  if (seen) return;
+  // Defer so the first paint of the dashboard is not blocked by the overlay.
+  queueMicrotask(() => {
+    if (!state.signedIn || state.helpOpen) return;
+    let stillUnseen = true;
+    try {
+      stillUnseen = localStorage.getItem(HELP_STORAGE_KEY) !== '1';
+    } catch {
+      stillUnseen = false;
+    }
+    if (!stillUnseen) return;
+    state.helpOpen = true;
+    renderApp();
+  });
 }
 
 function onTabJump(event) {
@@ -849,11 +1040,9 @@ async function renderReports() {
   });
 }
 
-// The CSV endpoints need the bearer token, so a plain link cannot fetch them.
+// CSV endpoints authenticate via the HttpOnly session cookie.
 async function downloadCsv(path, fileName) {
-  const response = await fetch(path, {
-    headers: state.token ? { Authorization: `Bearer ${state.token}` } : {}
-  });
+  const response = await fetch(path, { credentials: 'same-origin' });
   if (!response.ok) throw new Error(`Download failed (${response.status})`);
   const url = URL.createObjectURL(await response.blob());
   const link = document.createElement('a');
@@ -1867,6 +2056,9 @@ function renderImportMapping(mapping, users) {
 }
 
 function renderImportPreview(preview) {
+  const overageNote = preview.summary?.billingWarning
+    ? `<p class="billing-overage" role="status">${escapeHtml(preview.summary.billingWarning)}</p>`
+    : '';
   return `
     <section class="panel">
       <h2>Preview ${escapeHtml(String(preview.source || '').toUpperCase())}</h2>
@@ -1875,6 +2067,7 @@ function renderImportPreview(preview) {
         ${preview.summary.reassign || 0} reassign · ${preview.summary.needsReview || 0} need review ·
         ${preview.summary.skip} skip · ${preview.summary.warnings} with warnings
       </p>
+      ${overageNote}
       <div class="actions">
         <button id="applyImport" class="primary" type="button">Apply selected rows</button>
         <button id="selectImportAll" type="button">Select all valid</button>
@@ -2940,7 +3133,36 @@ function splitList(value, separator = /[,;]+/) {
 
 function renderAccount() {
   const organizationName = state.me.organization?.name || '';
+  const billing = state.billing || state.me.billing || {};
+  const plans = billing.plans || [];
   document.querySelector('#tabContent').innerHTML = `
+    <section class="panel">
+      <h2>Plan &amp; usage</h2>
+      <p class="lede">
+        Managed (non-retired) devices are the billing metric. Payments are invoiced
+        manually for early customers — no card required in-app.
+      </p>
+      <dl class="billing-facts">
+        <div><dt>Plan</dt><dd>${escapeHtml(billing.planLabel || billing.plan || 'trial')}</dd></div>
+        <div><dt>Status</dt><dd>${escapeHtml(billing.status || 'trial')}</dd></div>
+        <div><dt>Usage</dt><dd>${escapeHtml(billing.deviceUsage ?? 0)} / ${escapeHtml(billing.deviceLimit ?? '—')} devices</dd></div>
+        ${billing.trialEndsAt ? `<div><dt>Trial ends</dt><dd>${escapeHtml(new Date(billing.trialEndsAt).toLocaleString())}</dd></div>` : ''}
+        ${billing.billingEmail ? `<div><dt>Billing email</dt><dd>${escapeHtml(billing.billingEmail)}</dd></div>` : ''}
+      </dl>
+      ${plans.length ? `
+        <h3 class="subhead">Public price list</h3>
+        <ul class="plan-list">
+          ${plans.map((plan) => `
+            <li>
+              <strong>${escapeHtml(plan.label)}</strong>
+              · up to ${escapeHtml(plan.deviceLimit)} devices
+              · ${plan.priceMonthlyEur == null ? 'custom' : `€${escapeHtml(plan.priceMonthlyEur)}/mo`}
+              <span class="muted"> — ${escapeHtml(plan.headline)}</span>
+            </li>
+          `).join('')}
+        </ul>
+      ` : ''}
+    </section>
     <section class="panel">
       <h2>Change password</h2>
       <p class="lede">Changing it signs out every other device immediately.</p>
@@ -2974,9 +3196,7 @@ function renderAccount() {
     const result = document.querySelector('#passwordResult');
     try {
       const body = Object.fromEntries(new FormData(form).entries());
-      const changed = await api('/api/me/password', { method: 'PUT', body: JSON.stringify(body) });
-      state.token = changed.token;
-      localStorage.setItem('saas.token', changed.token);
+      await api('/api/me/password', { method: 'PUT', body: JSON.stringify(body) });
       form.reset();
       result.textContent = 'Password changed. Other sessions were signed out.';
       result.className = 'ok-text';
@@ -2992,8 +3212,8 @@ function renderAccount() {
     try {
       const body = Object.fromEntries(new FormData(event.currentTarget).entries());
       await api('/api/organizations/current', { method: 'DELETE', body: JSON.stringify(body) });
-      state.token = '';
-      localStorage.removeItem('saas.token');
+      state.signedIn = false;
+      state.me = null;
       renderAuth();
     } catch (error) {
       result.textContent = error.message;
@@ -3009,9 +3229,9 @@ function canWrite() {
 async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,
+    credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
-      ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}),
       ...(options.headers || {})
     }
   });
@@ -3024,7 +3244,7 @@ async function api(path, options = {}) {
 async function apiForm(path, formData) {
   const response = await fetch(path, {
     method: 'POST',
-    headers: state.token ? { Authorization: `Bearer ${state.token}` } : {},
+    credentials: 'same-origin',
     body: formData
   });
   const payload = await response.json();
@@ -3037,5 +3257,6 @@ function escapeHtml(value) {
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }

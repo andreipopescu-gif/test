@@ -524,7 +524,7 @@ function buildClient(baseUrl) {
       const invitation = await json('POST', '/api/invitations', adminToken, {
         email: `${role}-${randomUUID().slice(0, 8)}@example.test`, role
       });
-      const token = new URL(invitation.inviteUrl).searchParams.get('invite');
+      const token = inviteTokenFromUrl(invitation.inviteUrl);
       return json('POST', '/api/invitations/accept', '', { token, password: 'password-member', name: role });
     },
     async importFile(path, token, source, buffer, fileName) {
@@ -540,6 +540,13 @@ function buildClient(baseUrl) {
     }
   };
   return client;
+}
+
+function inviteTokenFromUrl(inviteUrl) {
+  const url = new URL(inviteUrl);
+  return url.searchParams.get('invite')
+    || new URLSearchParams(String(url.hash || '').replace(/^#/, '')).get('invite')
+    || '';
 }
 
 async function waitForHealth(baseUrl) {
