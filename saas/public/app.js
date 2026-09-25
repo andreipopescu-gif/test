@@ -1,5 +1,6 @@
 const app = document.querySelector('#app');
 const sessionLabel = document.querySelector('#sessionLabel');
+const topHelp = document.querySelector('#topHelp');
 
 const state = {
   me: null,
@@ -107,6 +108,7 @@ function setAuthMode(enabled) {
 function renderAuth() {
   setAuthMode(true);
   sessionLabel.textContent = '';
+  if (topHelp) topHelp.hidden = true;
   app.innerHTML = `
     <div class="auth-shell">
       <section class="auth-hero" aria-label="Product">
@@ -474,6 +476,10 @@ function renderApp() {
   const org = state.me.organization?.name || '';
   const user = state.me.user?.email || '';
   sessionLabel.innerHTML = `<strong>${escapeHtml(org)}</strong><br>${escapeHtml(user)} · ${escapeHtml(state.me.role)}`;
+  if (topHelp) {
+    topHelp.hidden = false;
+    topHelp.onclick = () => openHelpWalkthrough();
+  }
   app.innerHTML = `
     <div class="app-chrome">
       ${billingBannerHtml()}
@@ -731,6 +737,9 @@ async function renderDashboard() {
       renderApp();
     });
   });
+  document.querySelectorAll('[data-open-help]').forEach((button) => {
+    button.addEventListener('click', () => openHelpWalkthrough());
+  });
 }
 
 function issuesSummaryPanel(summary) {
@@ -745,7 +754,10 @@ function issuesSummaryPanel(summary) {
             ? `${escapeHtml(summary.open)} open issue(s): ${escapeHtml(severity.high || 0)} high, ${escapeHtml(severity.medium || 0)} medium, ${escapeHtml(severity.low || 0)} low.`
             : 'No open issues. Import or sync Entra and your MDM to check again.'}</p>
         </div>
-        <button type="button" data-tab-jump="issues">Open inbox</button>
+        <div class="page-head-actions">
+          <button type="button" class="ghost" data-open-help>Quick tour</button>
+          <button type="button" data-tab-jump="issues">Open inbox</button>
+        </div>
       </div>
       ${rules.length ? `<div class="issue-cards">${rules.map((item) => `
         <button type="button" class="issue-card" data-issue-rule="${escapeHtml(item.ruleKey)}">
