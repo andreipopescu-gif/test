@@ -118,7 +118,7 @@ test('production refuses to boot without SAAS_PUBLIC_URL', { timeout: 20_000 }, 
       PORT: String(port),
       HOST: '127.0.0.1',
       SAAS_DB_PATH: join(dir, 'saas.sqlite'),
-      SAAS_JWT_SECRET: 'auth-hardening-test-secret'
+      SAAS_JWT_SECRET: 'auth-hardening-test-secret-32chars!!'
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -191,7 +191,7 @@ async function withServer(env, run) {
       PORT: String(port),
       HOST: '127.0.0.1',
       SAAS_DB_PATH: join(dir, 'saas.sqlite'),
-      SAAS_JWT_SECRET: 'auth-hardening-test-secret'
+      SAAS_JWT_SECRET: 'auth-hardening-test-secret-32chars!!'
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });

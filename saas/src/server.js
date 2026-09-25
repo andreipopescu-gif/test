@@ -177,6 +177,16 @@ async function handleApi(req, res, url) {
   }
 
   if (method === 'POST' && path === '/api/auth/logout') {
+    // Best-effort revoke: bump epoch so stolen Bearer copies die immediately.
+    try {
+      const session = await requireSession(req);
+      await db.run(
+        'UPDATE users SET token_epoch = COALESCE(token_epoch, 0) + 1 WHERE id = ?',
+        [session.userId]
+      );
+    } catch {
+      // Still clear the cookie even if the session was already invalid.
+    }
     clearSessionCookie(req, res);
     return sendJson(res, { ok: true });
   }
@@ -688,7 +698,7 @@ function setSessionCookie(req, res, token) {
     'SameSite=Strict',
     `Max-Age=${SESSION_TTL_SEC}`
   ];
-  if (requestIsHttps(req)) parts.push('Secure');
+  if (requestIsHttps(req) || publicUrl.startsWith('https://')) parts.push('Secure');
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 
@@ -700,7 +710,7 @@ function clearSessionCookie(req, res) {
     'SameSite=Strict',
     'Max-Age=0'
   ];
-  if (requestIsHttps(req)) parts.push('Secure');
+  if (requestIsHttps(req) || publicUrl.startsWith('https://')) parts.push('Secure');
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 

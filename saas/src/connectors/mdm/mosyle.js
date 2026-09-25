@@ -1,4 +1,4 @@
-import { asList, readJson, requireFields, rowFromPreset } from './util.js';
+import { asList, normalizeHttpsBase, readJson, requireFields, rowFromPreset } from './util.js';
 
 const DEFAULT_BASE = 'https://businessapi.mosyle.com';
 
@@ -16,7 +16,7 @@ export const mosyleProvider = {
   optionalCredentialFields: ['baseUrl'],
   async fetch({ credentials = {}, fetchImpl = globalThis.fetch } = {}) {
     const accessToken = requireFields(credentials, ['accessToken'], 'Mosyle').accessToken;
-    const baseUrl = (credentials.baseUrl || DEFAULT_BASE).replace(/\/+$/, '');
+    const baseUrl = normalizeHttpsBase(credentials.baseUrl || DEFAULT_BASE);
     const devices = [];
     let page = 1;
     for (;;) {

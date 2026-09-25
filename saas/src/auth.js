@@ -5,19 +5,42 @@ import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypt
 const jwtSecret = () => {
   const secret = process.env.SAAS_JWT_SECRET;
   if (!secret) throw new Error('SAAS_JWT_SECRET is not set');
+  if (process.env.NODE_ENV === 'production' && secret.length < 32) {
+    throw new Error('SAAS_JWT_SECRET must be at least 32 characters in production');
+  }
   return secret;
 };
 
+// scrypt parameters travel with the hash so cost can rise over time without
+// invalidating existing passwords. Legacy rows are `salt:hash` at N=16384.
+const SCRYPT = { N: 32_768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+
 export function hashPassword(password) {
   const salt = randomBytes(16).toString('hex');
-  const hash = scryptSync(password, salt, 64).toString('hex');
-  return `${salt}:${hash}`;
+  const hash = scryptSync(password, salt, 64, SCRYPT).toString('hex');
+  return `${salt}:${SCRYPT.N}:${SCRYPT.r}:${SCRYPT.p}:${hash}`;
 }
 
 export function verifyPassword(password, stored) {
-  const [salt, hash] = String(stored || '').split(':');
+  const parts = String(stored || '').split(':');
+  let salt;
+  let hash;
+  let options = { N: 16_384, r: 8, p: 1, maxmem: SCRYPT.maxmem };
+  if (parts.length === 2) {
+    [salt, hash] = parts;
+  } else if (parts.length === 5) {
+    const n = Number(parts[1]);
+    const r = Number(parts[2]);
+    const p = Number(parts[3]);
+    salt = parts[0];
+    hash = parts[4];
+    if (!Number.isFinite(n) || !Number.isFinite(r) || !Number.isFinite(p)) return false;
+    options = { N: n, r, p, maxmem: SCRYPT.maxmem };
+  } else {
+    return false;
+  }
   if (!salt || !hash) return false;
-  const next = scryptSync(password, salt, 64).toString('hex');
+  const next = scryptSync(password, salt, 64, options).toString('hex');
   const a = Buffer.from(hash, 'hex');
   const b = Buffer.from(next, 'hex');
   if (a.length !== b.length) return false;

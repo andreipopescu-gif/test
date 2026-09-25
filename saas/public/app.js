@@ -346,7 +346,7 @@ function customFieldsInputs(entity, values = {}) {
   return (state.customFields[entity] || []).map((field) => {
     const value = bag?.[field.key] ?? '';
     const req = field.required ? 'required' : '';
-    const name = `custom.${field.key}`;
+    const name = `custom.${escapeHtml(field.key)}`;
     if (field.type === 'boolean') {
       return `
         <label class="check-inline">
@@ -3057,5 +3057,6 @@ function escapeHtml(value) {
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
