@@ -1,6 +1,7 @@
 import { entraProvider } from './entra.js';
 import { intuneProvider } from './intune.js';
 import { jamfProvider } from './jamf.js';
+import { extraMdmProviders } from './mdm/index.js';
 import { mockProvider } from './mock.js';
 
 /**
@@ -8,7 +9,13 @@ import { mockProvider } from './mock.js';
  * so a live sync goes through exactly the same preview, apply and exception
  * pipeline as an uploaded file.
  */
-export const PROVIDERS = [entraProvider, intuneProvider, jamfProvider, mockProvider];
+export const PROVIDERS = [
+  entraProvider,
+  intuneProvider,
+  jamfProvider,
+  ...extraMdmProviders,
+  mockProvider
+];
 
 export function getProvider(key) {
   return PROVIDERS.find((provider) => provider.key === key) || null;
@@ -22,7 +29,8 @@ export function describeProvider(provider) {
     datasets: provider.datasets,
     requiredScopes: provider.requiredScopes,
     auth: provider.auth || '',
-    credentialFields: provider.credentialFields
+    credentialFields: provider.credentialFields,
+    optionalCredentialFields: provider.optionalCredentialFields || []
   };
 }
 

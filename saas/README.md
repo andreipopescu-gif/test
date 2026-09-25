@@ -32,11 +32,12 @@ stays dismissed. Admins tune thresholds and switch rules off in
 
 Connections (**Settings → Connections**) share one interface: a provider
 returns records shaped like its CSV export, and they go through the same
-preview and apply as an upload. Live sync covers **Microsoft Entra ID**
-(`User.Read.All`), **Microsoft Intune**
-(`DeviceManagementManagedDevices.Read.All`), and **Jamf Pro** computers
-(OAuth API client). The demo provider fills sample Entra + Jamf data for issue
-demos. Credentials are encrypted with `SAAS_CONNECTOR_KEY`.
+preview and apply as an upload. Live sync covers **Entra**, **Intune**,
+**Jamf Pro**, and the other MDM presets (**Kandji**, **Mosyle**, **Workspace
+ONE**, **ChromeOS**, **JumpCloud**, **NinjaOne**, **ManageEngine**,
+**Hexnode**, **Addigy**, **SOTI**). The demo provider fills sample Entra +
+Jamf data for issue demos. Credentials are encrypted with
+`SAAS_CONNECTOR_KEY`.
 
 `npm run seed:demo` fills an organization with demo Entra users and Jamf Macs
 so every rule has an example.
@@ -79,8 +80,8 @@ so every rule has an example.
 
 - Invoice PDF import, PV DOCX handover documents, JSON backup/restore
 - Microsoft/Google SSO
-- Live MDM connectors for mobile-only Jamf inventory and scheduled sync
-  (computers + Intune managed devices sync today; Jamf phones/tablets later)
+- Scheduled connector sync and richer Jamf mobile / ChromeOS edge cases
+  (all major MDM live connectors are available; polish and scheduling remain)
 - Actions that change Entra or Jamf (lock, revoke, reassign) — planned behind
   explicit confirmation
 - MFA, licence and compliance checks (need richer live signals)

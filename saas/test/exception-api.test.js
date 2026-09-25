@@ -165,11 +165,14 @@ test('live connectors declare least-privilege scopes and refuse credentials with
     const entra = providers.find((item) => item.key === 'entra');
     const intune = providers.find((item) => item.key === 'intune');
     const jamf = providers.find((item) => item.key === 'jamf');
+    const kandji = providers.find((item) => item.key === 'kandji');
     assert.deepEqual(entra.requiredScopes, ['User.Read.All']);
     assert.deepEqual(intune.requiredScopes, ['DeviceManagementManagedDevices.Read.All']);
     assert.ok(jamf.requiredScopes.every((scope) => scope.startsWith('Read')));
     assert.equal(intune.live, true);
     assert.equal(jamf.live, true);
+    assert.equal(kandji.live, true);
+    assert.ok(providers.filter((item) => item.live).length >= 13);
 
     const noKey = await api.raw('PUT', '/api/connections/entra', admin.token, {
       credentials: { tenantId: 't', clientId: 'c', clientSecret: 's' }
