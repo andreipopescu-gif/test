@@ -1,5 +1,6 @@
 const app = document.querySelector('#app');
 const sessionLabel = document.querySelector('#sessionLabel');
+const topHelp = document.querySelector('#topHelp');
 
 const state = {
   token: localStorage.getItem('saas.token') || '',
@@ -26,6 +27,7 @@ const state = {
   viewingAsset: null,
   viewingPerson: null,
   exceptionsSummary: null,
+  helpOpen: false,
   issueFilter: { status: 'active', rule: '', severity: '', assignee: '' },
   assetFilter: { search: '', status: '', category: '' },
   mergeKeepId: '',
@@ -34,6 +36,31 @@ const state = {
 
 /** Kept outside state so File can be re-posted for mapping continue. */
 let lastImportFile = null;
+
+const HELP_STORAGE_KEY = 'saas_walkthrough_v1';
+
+const HELP_STEPS = [
+  {
+    title: 'Start from Issues',
+    body: 'The product answers what needs fixing today — missing owners, disabled accounts still holding devices, stale check-ins, and Entra/MDM mismatches.'
+  },
+  {
+    title: 'People and Devices',
+    body: 'Look up who has which laptop or phone. Open a person or device for assignment history and related open issues.'
+  },
+  {
+    title: 'Bring data in',
+    body: 'Use Import for CSV (Intune, Jamf, …) or Settings → Connections for live Entra / MDM sync. Preview first, then apply.'
+  },
+  {
+    title: 'Act on an issue',
+    body: 'Assign it to yourself, snooze, or resolve with a short note. The issue closes itself when the condition clears.'
+  },
+  {
+    title: 'Invite your team',
+    body: 'Members lets admins invite Admin, IT, or read-only seats. Account is where you change your password.'
+  }
+];
 
 boot();
 
@@ -59,6 +86,9 @@ function setAuthMode(enabled) {
 function renderAuth() {
   setAuthMode(true);
   sessionLabel.textContent = '';
+  if (topHelp) {
+    topHelp.hidden = true;
+  }
   app.innerHTML = `
     <div class="auth-shell">
       <section class="auth-hero" aria-label="Product">
@@ -391,6 +421,10 @@ function renderApp() {
   const org = state.me.organization?.name || '';
   const user = state.me.user?.email || '';
   sessionLabel.innerHTML = `<strong>${escapeHtml(org)}</strong><br>${escapeHtml(user)} · ${escapeHtml(state.me.role)}`;
+  if (topHelp) {
+    topHelp.hidden = false;
+    topHelp.onclick = () => openHelpWalkthrough();
+  }
   app.innerHTML = `
     <div class="app-chrome">
       <div class="nav-row">
@@ -417,10 +451,12 @@ function renderApp() {
               `).join('')}
             </select>
           ` : ''}
+          <button type="button" id="openHelp" class="ghost">Help</button>
           <button type="button" id="logout" class="ghost">Log out</button>
         </div>
       </div>
       <div id="tabContent" class="section-stack"></div>
+      ${state.helpOpen ? helpWalkthroughHtml() : ''}
     </div>
   `;
   document.querySelectorAll('[data-tab]').forEach((button) => {
@@ -430,8 +466,10 @@ function renderApp() {
     });
   });
   document.addEventListener('click', onTabJump);
+  document.querySelector('#openHelp')?.addEventListener('click', () => openHelpWalkthrough());
   document.querySelector('#logout').addEventListener('click', () => {
     state.token = '';
+    state.helpOpen = false;
     localStorage.removeItem('saas.token');
     renderAuth();
   });
@@ -442,6 +480,7 @@ function renderApp() {
     });
     await acceptSession(result);
   });
+  if (state.helpOpen) bindHelpWalkthrough();
   if (state.tab === 'dashboard') renderDashboard();
   else if (state.tab === 'issues') renderIssues();
   else if (state.tab === 'people') renderPeople();
@@ -451,6 +490,102 @@ function renderApp() {
   else if (state.tab === 'settings') renderSettings();
   else if (state.tab === 'account') renderAccount();
   else renderMembers();
+  maybeOfferFirstRunHelp();
+}
+
+function helpWalkthroughHtml() {
+  return `
+    <div class="modal-backdrop" data-modal-dismiss="help" role="presentation">
+      <div class="modal-dialog help-dialog" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+        <div class="page-head">
+          <div>
+            <h2 id="helpTitle">Quick tour</h2>
+            <p class="lede">Five minutes to know where to look. Reopen anytime from Help.</p>
+          </div>
+          <button type="button" class="ghost" data-close-help>Close</button>
+        </div>
+        <ol class="help-steps">
+          ${HELP_STEPS.map((step, index) => `
+            <li>
+              <span class="help-step-num" aria-hidden="true">${index + 1}</span>
+              <div>
+                <strong>${escapeHtml(step.title)}</strong>
+                <p>${escapeHtml(step.body)}</p>
+              </div>
+            </li>
+          `).join('')}
+        </ol>
+        <div class="actions help-actions">
+          <button type="button" class="primary" data-finish-help>Got it</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function openHelpWalkthrough() {
+  state.helpOpen = true;
+  renderApp();
+}
+
+function closeHelpWalkthrough({ remember = true } = {}) {
+  state.helpOpen = false;
+  if (helpKeyAbort) {
+    helpKeyAbort.abort();
+    helpKeyAbort = null;
+  }
+  if (remember) {
+    try {
+      localStorage.setItem(HELP_STORAGE_KEY, '1');
+    } catch {
+      // Private mode may block storage; ignore.
+    }
+  }
+  renderApp();
+}
+
+let helpKeyAbort = null;
+
+function bindHelpWalkthrough() {
+  const finish = () => closeHelpWalkthrough({ remember: true });
+  document.querySelectorAll('[data-close-help], [data-finish-help]').forEach((node) => {
+    node.addEventListener('click', (event) => {
+      event.preventDefault();
+      finish();
+    });
+  });
+  document.querySelector('[data-modal-dismiss="help"]')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) finish();
+  });
+  if (helpKeyAbort) helpKeyAbort.abort();
+  helpKeyAbort = new AbortController();
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    finish();
+  }, { signal: helpKeyAbort.signal });
+}
+
+function maybeOfferFirstRunHelp() {
+  if (state.helpOpen || !state.me) return;
+  let seen = false;
+  try {
+    seen = localStorage.getItem(HELP_STORAGE_KEY) === '1';
+  } catch {
+    seen = true;
+  }
+  if (seen) return;
+  queueMicrotask(() => {
+    if (!state.me || state.helpOpen) return;
+    let stillUnseen = true;
+    try {
+      stillUnseen = localStorage.getItem(HELP_STORAGE_KEY) !== '1';
+    } catch {
+      stillUnseen = false;
+    }
+    if (!stillUnseen) return;
+    state.helpOpen = true;
+    renderApp();
+  });
 }
 
 function onTabJump(event) {
@@ -540,6 +675,9 @@ async function renderDashboard() {
       renderApp();
     });
   });
+  document.querySelectorAll('[data-open-help]').forEach((button) => {
+    button.addEventListener('click', () => openHelpWalkthrough());
+  });
 }
 
 function issuesSummaryPanel(summary) {
@@ -554,7 +692,10 @@ function issuesSummaryPanel(summary) {
             ? `${escapeHtml(summary.open)} open issue(s): ${escapeHtml(severity.high || 0)} high, ${escapeHtml(severity.medium || 0)} medium, ${escapeHtml(severity.low || 0)} low.`
             : 'No open issues. Import or sync Entra and your MDM to check again.'}</p>
         </div>
-        <button type="button" data-tab-jump="issues">Open inbox</button>
+        <div class="page-head-actions">
+          <button type="button" class="ghost" data-open-help>Quick tour</button>
+          <button type="button" data-tab-jump="issues">Open inbox</button>
+        </div>
       </div>
       ${rules.length ? `<div class="issue-cards">${rules.map((item) => `
         <button type="button" class="issue-card" data-issue-rule="${escapeHtml(item.ruleKey)}">
