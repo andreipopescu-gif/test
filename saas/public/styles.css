@@ -478,6 +478,12 @@ td.row-actions button {
   font-size: 0.86rem;
 }
 
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .empty {
   padding: 2rem 0.75rem;
   text-align: center;
