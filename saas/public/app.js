@@ -2281,21 +2281,39 @@ function settingsConnectionsPanel(data, canEdit) {
 
 function connectionCredentialsForm(provider, hasCredentials) {
   const fields = provider.credentialFields || [];
+  const optional = new Set(provider.optionalCredentialFields || []);
   const labels = {
     tenantId: 'Directory (tenant) ID',
     clientId: 'Application (client) ID',
     clientSecret: 'Client secret',
-    baseUrl: 'Jamf base URL',
+    baseUrl: 'API base URL',
+    apiKey: 'API key',
+    apiToken: 'API token',
+    accessToken: 'Access token',
+    tenantCode: 'Tenant code (aw-tenant-code)',
+    customerId: 'Google customer ID',
+    clientEmail: 'Service account email',
+    privateKey: 'Service account private key',
+    subject: 'Impersonate admin email (domain-wide delegation)'
   };
   return `
     <form class="connection-credentials grid" data-credentials-form="${escapeHtml(provider.key)}">
-      ${fields.map((field) => `
-        <label class="${field === 'clientSecret' || field === 'baseUrl' ? 'span-all' : ''}">${escapeHtml(labels[field] || field)}
-          <input name="${escapeHtml(field)}" ${field === 'clientSecret' ? 'type="password" autocomplete="off"' : 'type="text" autocomplete="off"'}
-            placeholder="${hasCredentials && field === 'clientSecret' ? 'Leave blank to keep current secret' : ''}"
-            ${field === 'clientSecret' && hasCredentials ? '' : 'required'}>
-        </label>
-      `).join('')}
+      ${fields.map((field) => {
+        const isSecret = field === 'clientSecret' || field === 'apiKey' || field === 'apiToken'
+          || field === 'accessToken' || field === 'privateKey';
+        const isOptional = optional.has(field) || (isSecret && hasCredentials);
+        const isWide = isSecret || field === 'baseUrl' || field === 'privateKey' || field === 'subject';
+        return `
+        <label class="${isWide ? 'span-all' : ''}">${escapeHtml(labels[field] || field)}${optional.has(field) ? ' <span class="hint">optional</span>' : ''}
+          <${field === 'privateKey' ? 'textarea' : 'input'} name="${escapeHtml(field)}" ${
+            field === 'privateKey'
+              ? `rows="4" autocomplete="off"${isOptional ? '' : ' required'}`
+              : `${isSecret ? 'type="password" autocomplete="off"' : 'type="text" autocomplete="off"'} ${
+                isOptional ? '' : 'required'
+              } placeholder="${hasCredentials && isSecret ? 'Leave blank to keep current value' : ''}"`
+          }>${field === 'privateKey' ? '</textarea>' : ''}
+        </label>`;
+      }).join('')}
       <div class="actions span-all">
         <button class="primary" type="submit">${hasCredentials ? 'Update credentials' : 'Save credentials'}</button>
       </div>

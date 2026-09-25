@@ -1490,7 +1490,10 @@ async function saveConnection(session, providerKey, input) {
       const trimmed = String(value ?? '').trim();
       if (trimmed) merged[field] = trimmed;
     }
-    const missing = provider.credentialFields.filter((field) => !String(merged[field] || '').trim());
+    const optional = new Set(provider.optionalCredentialFields || []);
+    const missing = provider.credentialFields.filter((field) =>
+      !optional.has(field) && !String(merged[field] || '').trim()
+    );
     if (missing.length) throw badRequest(`Missing credential fields: ${missing.join(', ')}`);
     encrypted = encryptCredentials(merged);
   }
