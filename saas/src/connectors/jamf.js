@@ -5,7 +5,7 @@
  * share the same mapper and exception rules.
  */
 
-import { clean, trimSlash } from './graph.js';
+import { clean } from './graph.js';
 import { normalizeOutboundBaseUrl } from './url-safety.js';
 
 export const jamfProvider = {
