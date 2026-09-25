@@ -80,8 +80,8 @@ so every rule has an example.
 
 - Invoice PDF import, PV DOCX handover documents, JSON backup/restore
 - Microsoft/Google SSO
-- Live Jamf / Intune sync (Entra Graph sync is live; Jamf and Intune still use
-  CSV/ZIP import for the same pipeline)
+- Live MDM connectors for mobile-only Jamf inventory and scheduled sync
+  (computers + Intune managed devices sync today; Jamf phones/tablets later)
 - Actions that change Entra or Jamf (lock, revoke, reassign) — planned behind
   explicit confirmation
 - MFA, licence and compliance checks (need the live connectors)

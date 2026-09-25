@@ -2259,8 +2259,7 @@ function settingsConnectionsPanel(data, canEdit) {
                 <strong>${escapeHtml(provider.label)}</strong>
                 <span class="muted">${escapeHtml(provider.datasets.join(' + '))}</span>
                 ${provider.live
-                  ? `<p class="muted">Permissions: ${escapeHtml(provider.requiredScopes.join(', '))}. ${escapeHtml(provider.auth)}</p>
-                     ${provider.key === 'jamf' ? '<p class="muted">Live Jamf sync is not available yet; use CSV import meanwhile.</p>' : ''}`
+                  ? `<p class="muted">Permissions: ${escapeHtml(provider.requiredScopes.join(', '))}. ${escapeHtml(provider.auth)}</p>`
                   : '<p class="muted">Fills this organization with sample Entra users and Jamf Macs so every issue type shows up.</p>'}
                 ${connection ? `<p class="muted">Status: ${escapeHtml(connection.status)}${hasCredentials ? ' · credentials saved' : ''}${connection.lastSyncAt ? ` · last sync ${escapeHtml(relativeTime(connection.lastSyncAt))}` : ''}${connection.lastError ? ` · ${escapeHtml(connection.lastError)}` : ''}</p>` : ''}
                 ${showCredentialForm ? connectionCredentialsForm(provider, hasCredentials) : ''}

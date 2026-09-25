@@ -1,4 +1,6 @@
 import { entraProvider } from './entra.js';
+import { intuneProvider } from './intune.js';
+import { jamfProvider } from './jamf.js';
 import { mockProvider } from './mock.js';
 
 /**
@@ -6,20 +8,7 @@ import { mockProvider } from './mock.js';
  * so a live sync goes through exactly the same preview, apply and exception
  * pipeline as an uploaded file.
  */
-const jamfProvider = {
-  key: 'jamf',
-  label: 'Jamf Pro',
-  live: true,
-  datasets: ['devices'],
-  requiredScopes: ['Read Computers', 'Read Mobile Devices', 'Read Users'],
-  auth: 'Jamf Pro API client (client credentials) with a read-only API role.',
-  credentialFields: ['baseUrl', 'clientId', 'clientSecret'],
-  async fetch() {
-    throw notImplemented('Jamf Pro');
-  }
-};
-
-export const PROVIDERS = [entraProvider, jamfProvider, mockProvider];
+export const PROVIDERS = [entraProvider, intuneProvider, jamfProvider, mockProvider];
 
 export function getProvider(key) {
   return PROVIDERS.find((provider) => provider.key === key) || null;
@@ -43,10 +32,4 @@ export function recordsToCsv(records) {
   const lines = [headers.map(cell).join(',')];
   for (const record of records) lines.push(headers.map((header) => cell(record[header])).join(','));
   return Buffer.from(`${lines.join('\r\n')}\r\n`, 'utf8');
-}
-
-function notImplemented(name) {
-  const error = new Error(`${name} live sync is not available yet. Use CSV import or the demo connector.`);
-  error.status = 501;
-  return error;
 }
