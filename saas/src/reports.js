@@ -125,5 +125,8 @@ function personName(asset) {
 }
 
 function csvCell(value) {
-  return `"${String(value ?? '').replaceAll('"', '""')}"`;
+  let text = String(value ?? '');
+  // Prevent spreadsheet formula execution when IT opens the CSV in Excel/Sheets.
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  return `"${text.replaceAll('"', '""')}"`;
 }

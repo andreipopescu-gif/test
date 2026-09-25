@@ -2,7 +2,6 @@ const app = document.querySelector('#app');
 const sessionLabel = document.querySelector('#sessionLabel');
 
 const state = {
-  token: localStorage.getItem('saas.token') || '',
   me: null,
   tab: 'dashboard',
   settingsTab: 'catalog',
@@ -29,7 +28,8 @@ const state = {
   issueFilter: { status: 'active', rule: '', severity: '', assignee: '' },
   assetFilter: { search: '', status: '', category: '' },
   mergeKeepId: '',
-  mergeAbsorbId: ''
+  mergeAbsorbId: '',
+  signedIn: false
 };
 
 /** Kept outside state so File can be re-posted for mapping continue. */
@@ -38,18 +38,37 @@ let lastImportFile = null;
 boot();
 
 async function boot() {
-  const inviteToken = new URLSearchParams(location.search).get('invite');
-  if (inviteToken) return renderInvitation(inviteToken);
-  if (!state.token) return renderAuth();
+  // Legacy query invites still work once, then we strip them from the URL.
+  const inviteToken = readInviteToken();
+  if (inviteToken) {
+    clearInviteFromUrl();
+    return renderInvitation(inviteToken);
+  }
   try {
     state.me = await api('/api/me');
+    state.signedIn = true;
     await loadData();
     renderApp();
   } catch {
-    state.token = '';
-    localStorage.removeItem('saas.token');
+    state.signedIn = false;
+    state.me = null;
     renderAuth();
   }
+}
+
+function readInviteToken() {
+  const hash = String(location.hash || '').replace(/^#/, '');
+  const fromHash = new URLSearchParams(hash.includes('=') ? hash : '').get('invite');
+  if (fromHash) return fromHash;
+  // One-time bridge for links generated before fragment delivery.
+  return new URLSearchParams(location.search).get('invite') || '';
+}
+
+function clearInviteFromUrl() {
+  const url = new URL(location.href);
+  url.searchParams.delete('invite');
+  url.hash = '';
+  history.replaceState({}, '', `${url.pathname}${url.search}`);
 }
 
 function setAuthMode(enabled) {
@@ -126,8 +145,8 @@ async function onLogin(event) {
 }
 
 async function acceptSession(result) {
-  state.token = result.token;
-  localStorage.setItem('saas.token', result.token);
+  // Session cookie is set by the server (HttpOnly). Never keep the JWT in JS.
+  state.signedIn = true;
   state.me = await api('/api/me');
   history.replaceState({}, '', '/');
   await loadData();
@@ -327,7 +346,7 @@ function customFieldsInputs(entity, values = {}) {
   return (state.customFields[entity] || []).map((field) => {
     const value = bag?.[field.key] ?? '';
     const req = field.required ? 'required' : '';
-    const name = `custom.${field.key}`;
+    const name = `custom.${escapeHtml(field.key)}`;
     if (field.type === 'boolean') {
       return `
         <label class="check-inline">
@@ -430,9 +449,14 @@ function renderApp() {
     });
   });
   document.addEventListener('click', onTabJump);
-  document.querySelector('#logout').addEventListener('click', () => {
-    state.token = '';
-    localStorage.removeItem('saas.token');
+  document.querySelector('#logout').addEventListener('click', async () => {
+    try {
+      await api('/api/auth/logout', { method: 'POST', body: '{}' });
+    } catch {
+      // Clear local UI even if the network call failed.
+    }
+    state.signedIn = false;
+    state.me = null;
     renderAuth();
   });
   document.querySelector('#organizationSwitch')?.addEventListener('change', async (event) => {
@@ -849,11 +873,9 @@ async function renderReports() {
   });
 }
 
-// The CSV endpoints need the bearer token, so a plain link cannot fetch them.
+// CSV endpoints authenticate via the HttpOnly session cookie.
 async function downloadCsv(path, fileName) {
-  const response = await fetch(path, {
-    headers: state.token ? { Authorization: `Bearer ${state.token}` } : {}
-  });
+  const response = await fetch(path, { credentials: 'same-origin' });
   if (!response.ok) throw new Error(`Download failed (${response.status})`);
   const url = URL.createObjectURL(await response.blob());
   const link = document.createElement('a');
@@ -2974,9 +2996,7 @@ function renderAccount() {
     const result = document.querySelector('#passwordResult');
     try {
       const body = Object.fromEntries(new FormData(form).entries());
-      const changed = await api('/api/me/password', { method: 'PUT', body: JSON.stringify(body) });
-      state.token = changed.token;
-      localStorage.setItem('saas.token', changed.token);
+      await api('/api/me/password', { method: 'PUT', body: JSON.stringify(body) });
       form.reset();
       result.textContent = 'Password changed. Other sessions were signed out.';
       result.className = 'ok-text';
@@ -2992,8 +3012,8 @@ function renderAccount() {
     try {
       const body = Object.fromEntries(new FormData(event.currentTarget).entries());
       await api('/api/organizations/current', { method: 'DELETE', body: JSON.stringify(body) });
-      state.token = '';
-      localStorage.removeItem('saas.token');
+      state.signedIn = false;
+      state.me = null;
       renderAuth();
     } catch (error) {
       result.textContent = error.message;
@@ -3009,9 +3029,9 @@ function canWrite() {
 async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,
+    credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
-      ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}),
       ...(options.headers || {})
     }
   });
@@ -3024,7 +3044,7 @@ async function api(path, options = {}) {
 async function apiForm(path, formData) {
   const response = await fetch(path, {
     method: 'POST',
-    headers: state.token ? { Authorization: `Bearer ${state.token}` } : {},
+    credentials: 'same-origin',
     body: formData
   });
   const payload = await response.json();
@@ -3037,5 +3057,6 @@ function escapeHtml(value) {
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }

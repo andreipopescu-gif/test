@@ -4,6 +4,7 @@
  */
 
 import { getPreset } from '../../import/mdm-presets.js';
+import { normalizeOutboundBaseUrl } from '../url-safety.js';
 
 export function clean(value) {
   return String(value ?? '').trim();
@@ -30,29 +31,7 @@ export function requireFields(credentials, fields, label) {
 }
 
 export function normalizeHttpsBase(value, { allowHttpLoopback = true } = {}) {
-  const raw = clean(value).replace(/\/+$/, '');
-  if (!raw) return '';
-  let url;
-  try {
-    url = new URL(raw.includes('://') ? raw : `https://${raw}`);
-  } catch {
-    const error = new Error('baseUrl must be a valid http(s) URL.');
-    error.status = 400;
-    throw error;
-  }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    const error = new Error('baseUrl must use http or https.');
-    error.status = 400;
-    throw error;
-  }
-  const host = url.hostname.toLowerCase();
-  const loopback = host === '127.0.0.1' || host === 'localhost';
-  if (url.protocol === 'http:' && !(allowHttpLoopback && loopback) && process.env.SAAS_MDM_ALLOW_INSECURE !== '1') {
-    const error = new Error('baseUrl must use https.');
-    error.status = 400;
-    throw error;
-  }
-  return trimSlash(url.toString());
+  return normalizeOutboundBaseUrl(value, { allowHttpLoopback, label: 'baseUrl' });
 }
 
 /** Build a CSV row using each preset field's primary header alias. */

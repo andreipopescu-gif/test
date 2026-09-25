@@ -102,7 +102,7 @@ test('IT role can create models but not categories', { timeout: 30_000 }, async 
       email: inviteEmail,
       role: 'it'
     });
-    const inviteToken = new URL(invitation.inviteUrl).searchParams.get('invite');
+    const inviteToken = inviteTokenFromUrl(invitation.inviteUrl);
     assert.ok(inviteToken);
 
     const accepted = await api.post('/api/invitations/accept', '', {
@@ -195,6 +195,13 @@ function buildClient(baseUrl) {
       return { ...created, email };
     }
   };
+}
+
+function inviteTokenFromUrl(inviteUrl) {
+  const url = new URL(inviteUrl);
+  return url.searchParams.get('invite')
+    || new URLSearchParams(String(url.hash || '').replace(/^#/, '')).get('invite')
+    || '';
 }
 
 async function waitForHealth(baseUrl) {

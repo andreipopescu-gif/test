@@ -96,10 +96,16 @@ function findDataDescriptor(buffer, dataStart) {
   throw new Error('ZIP-ul nu contine descriptorul de date asteptat.');
 }
 
-function decompressEntry(compressed, compressionMethod, uncompressedSize) {
-  if (compressionMethod === 0) return compressed;
+function decompressEntry(compressed, compressionMethod, uncompressedSize, maxBytes = 20 * 1024 * 1024) {
+  if (Number.isFinite(uncompressedSize) && uncompressedSize > maxBytes) {
+    throw new Error('CSV-ul din ZIP depaseste limita de dimensiune.');
+  }
+  if (compressionMethod === 0) {
+    if (compressed.length > maxBytes) throw new Error('CSV-ul din ZIP depaseste limita de dimensiune.');
+    return compressed;
+  }
   if (compressionMethod === 8) {
-    const inflated = inflateRawSync(compressed);
+    const inflated = inflateRawSync(compressed, { maxOutputLength: maxBytes });
     if (uncompressedSize && inflated.length !== uncompressedSize) {
       throw new Error('CSV-ul din ZIP pare corupt.');
     }
