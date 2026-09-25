@@ -157,27 +157,24 @@ test('CSV import of the same Entra and Jamf data yields the same issues as the c
   });
 });
 
-test('live connectors declare least-privilege scopes; Jamf is still stubbed', { timeout: 60_000 }, async () => {
+test('live connectors declare least-privilege scopes and refuse credentials without a key', { timeout: 60_000 }, async () => {
   await withServer(async (api) => {
     const admin = await api.register(`Live ${randomUUID().slice(0, 6)}`);
     const { providers, canStoreCredentials } = await api.get('/api/connections', admin.token);
     assert.equal(canStoreCredentials, false);
     const entra = providers.find((item) => item.key === 'entra');
+    const intune = providers.find((item) => item.key === 'intune');
+    const jamf = providers.find((item) => item.key === 'jamf');
     assert.deepEqual(entra.requiredScopes, ['User.Read.All']);
-    assert.ok(providers.find((item) => item.key === 'jamf').requiredScopes.every((scope) => scope.startsWith('Read')));
+    assert.deepEqual(intune.requiredScopes, ['DeviceManagementManagedDevices.Read.All']);
+    assert.ok(jamf.requiredScopes.every((scope) => scope.startsWith('Read')));
+    assert.equal(intune.live, true);
+    assert.equal(jamf.live, true);
 
     const noKey = await api.raw('PUT', '/api/connections/entra', admin.token, {
       credentials: { tenantId: 't', clientId: 'c', clientSecret: 's' }
     });
     assert.equal(noKey.status, 503);
-
-    await api.put('/api/connections/jamf', admin.token, { config: { baseUrl: 'https://example.jamfcloud.com' } });
-    const sync = await api.raw('POST', '/api/connections/jamf/sync', admin.token, {});
-    assert.equal(sync.status, 501);
-    const listed = (await api.get('/api/connections', admin.token)).providers.find((item) => item.key === 'jamf');
-    assert.equal(listed.connection.status, 'error');
-    assert.equal(listed.connection.hasCredentials, false);
-    assert.equal('encryptedCredentials' in listed.connection, false);
   });
 });
 
@@ -218,6 +215,57 @@ test('live Entra sync imports Graph users through the normal pipeline', { timeou
     });
   } finally {
     await graph.close();
+  }
+});
+
+test('live Intune sync imports managed devices through the normal pipeline', { timeout: 60_000 }, async () => {
+  const graph = await startMockGraph();
+  try {
+    await withServer(async (api) => {
+      const admin = await api.register(`Intune ${randomUUID().slice(0, 6)}`);
+      await api.put('/api/connections/intune', admin.token, {
+        credentials: { tenantId: 'tenant-i', clientId: 'client-i', clientSecret: 'secret-i' }
+      });
+      const sync = await api.post('/api/connections/intune/sync', admin.token, {});
+      assert.equal(sync.devices.created, 1);
+      const assets = await api.get('/api/assets', admin.token);
+      assert.equal(assets.length, 1);
+      assert.equal(assets[0].serialNumber, 'INTUNE001');
+      assert.ok(assets[0].sourcePresence?.intune);
+      const listed = (await api.get('/api/connections', admin.token)).providers.find((item) => item.key === 'intune');
+      assert.equal(listed.connection.status, 'connected');
+    }, {
+      SAAS_CONNECTOR_KEY: 'test-connector-key',
+      SAAS_GRAPH_LOGIN_URL: graph.loginBase,
+      SAAS_GRAPH_BASE_URL: graph.graphBase
+    });
+  } finally {
+    await graph.close();
+  }
+});
+
+test('live Jamf sync imports computers through the normal pipeline', { timeout: 60_000 }, async () => {
+  const jamf = await startMockJamf();
+  try {
+    await withServer(async (api) => {
+      const admin = await api.register(`Jamf ${randomUUID().slice(0, 6)}`);
+      await api.put('/api/connections/jamf', admin.token, {
+        credentials: {
+          baseUrl: jamf.baseUrl,
+          clientId: 'jamf-client',
+          clientSecret: 'jamf-secret'
+        }
+      });
+      const sync = await api.post('/api/connections/jamf/sync', admin.token, {});
+      assert.equal(sync.devices.created, 1);
+      const assets = await api.get('/api/assets', admin.token);
+      assert.equal(assets[0].serialNumber, 'C02JAMF001');
+      assert.ok(assets[0].sourcePresence?.jamf);
+      const listed = (await api.get('/api/connections', admin.token)).providers.find((item) => item.key === 'jamf');
+      assert.equal(listed.connection.status, 'connected');
+    }, { SAAS_CONNECTOR_KEY: 'test-connector-key' });
+  } finally {
+    await jamf.close();
   }
 });
 
@@ -341,6 +389,35 @@ async function startMockGraph() {
       res.end(JSON.stringify({ value: users }));
       return;
     }
+    if (req.method === 'GET' && url.pathname.startsWith('/v1.0/deviceManagement/managedDevices')) {
+      const auth = req.headers.authorization || '';
+      if (auth !== 'Bearer mock-graph-token') {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Unauthorized' } }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        value: [{
+          id: 'intune-device-1',
+          deviceName: 'ANA-LAPTOP',
+          managedDeviceName: 'ANA-LAPTOP',
+          serialNumber: 'INTUNE001',
+          manufacturer: 'Microsoft',
+          model: 'Surface Laptop',
+          operatingSystem: 'Windows',
+          osVersion: '11',
+          imei: '',
+          userPrincipalName: 'ana.pop@contoso.test',
+          userDisplayName: 'Ana Pop',
+          emailAddress: 'ana.pop@contoso.test',
+          deviceCategoryDisplayName: 'Corp',
+          lastSyncDateTime: '2026-09-24T08:00:00Z',
+          enrolledDateTime: '2025-06-01T00:00:00Z'
+        }]
+      }));
+      return;
+    }
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: { message: `No route ${req.method} ${url.pathname}` } }));
   });
@@ -350,6 +427,67 @@ async function startMockGraph() {
   return {
     loginBase: base,
     graphBase: base,
+    close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+  };
+}
+
+async function startMockJamf() {
+  const { createServer } = await import('node:http');
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    if (req.method === 'POST' && url.pathname === '/api/oauth/token') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ access_token: 'mock-jamf-token', expires_in: 3600, token_type: 'Bearer' }));
+      return;
+    }
+    const auth = req.headers.authorization || '';
+    if (auth !== 'Bearer mock-jamf-token') {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/JSSResource/computers') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ computers: [{ id: 42, name: 'MBP-JAMF' }] }));
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/JSSResource/computers/id/42') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        computer: {
+          general: {
+            id: 42,
+            name: 'MBP-JAMF',
+            serial_number: 'C02JAMF001',
+            asset_tag: 'J-1',
+            report_date_utc: '2026-09-24T09:00:00Z',
+            last_enrolled_date_utc: '2025-01-01T00:00:00Z'
+          },
+          hardware: {
+            make: 'Apple',
+            model: 'MacBook Pro 14',
+            model_identifier: 'Mac15,6',
+            os_name: 'macOS',
+            os_version: '15.4',
+            total_ram_mb: 16384
+          },
+          location: {
+            username: 'ana.pop',
+            realname: 'Ana Pop',
+            email_address: 'ana.pop@demo.example',
+            department: 'Engineering'
+          }
+        }
+      }));
+      return;
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: `No route ${req.method} ${url.pathname}` }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
     close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
   };
 }
