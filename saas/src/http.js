@@ -73,7 +73,11 @@ export function sendError(res, error) {
   // is an internal failure whose text leaks table names, driver internals and
   // file paths, so the client gets a generic message and the detail is logged.
   const message = error.status ? error.message : 'Server error';
-  sendJson(res, { error: message || 'Server error' }, status);
+  const payload = { error: message || 'Server error' };
+  if (error.status && error.details && typeof error.details === 'object') {
+    payload.details = error.details;
+  }
+  sendJson(res, payload, status);
   if (status >= 500) console.error(error);
 }
 

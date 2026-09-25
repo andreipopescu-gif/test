@@ -25,6 +25,7 @@ const state = {
   viewingAsset: null,
   viewingPerson: null,
   exceptionsSummary: null,
+  billing: null,
   issueFilter: { status: 'active', rule: '', severity: '', assignee: '' },
   assetFilter: { search: '', status: '', category: '' },
   mergeKeepId: '',
@@ -47,11 +48,13 @@ async function boot() {
   try {
     state.me = await api('/api/me');
     state.signedIn = true;
+    state.billing = state.me.billing || null;
     await loadData();
     renderApp();
   } catch {
     state.signedIn = false;
     state.me = null;
+    state.billing = null;
     renderAuth();
   }
 }
@@ -148,6 +151,7 @@ async function acceptSession(result) {
   // Session cookie is set by the server (HttpOnly). Never keep the JWT in JS.
   state.signedIn = true;
   state.me = await api('/api/me');
+  state.billing = state.me.billing || null;
   history.replaceState({}, '', '/');
   await loadData();
   renderApp();
@@ -405,6 +409,40 @@ function catalogModelSelect(selectedId = '', { name = 'modelId', emptyLabel = '�
   `;
 }
 
+function billingBannerHtml() {
+  const billing = state.billing || state.me?.billing;
+  if (!billing) return '';
+  const usage = Number(billing.deviceUsage || 0);
+  const limit = Number(billing.deviceLimit || 0);
+  const ratio = limit > 0 ? usage / limit : 0;
+  const trialEnds = billing.trialEndsAt ? new Date(billing.trialEndsAt) : null;
+  const trialLabel = trialEnds && !Number.isNaN(trialEnds.getTime())
+    ? trialEnds.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+    : '';
+
+  let tone = '';
+  let message = '';
+  if (billing.status === 'suspended') {
+    tone = 'billing-banner--danger';
+    message = `Billing suspended · ${usage}/${limit} managed devices. Read and export still work; contact us to restore writes.`;
+  } else if (billing.status === 'past_due') {
+    tone = 'billing-banner--warn';
+    message = `Trial ended · ${usage}/${limit} managed devices on ${escapeHtml(billing.planLabel || billing.plan)}. Reply to your invoice to continue.`;
+  } else if (ratio >= 1) {
+    tone = 'billing-banner--warn';
+    message = `Device limit reached · ${usage}/${limit} managed. Imports may still apply with overage; new manual devices need a plan bump.`;
+  } else if (ratio >= 0.8 || billing.status === 'trial') {
+    tone = 'billing-banner--info';
+    message = billing.status === 'trial'
+      ? `Trial · ${usage}/${limit} managed devices${trialLabel ? ` · ends ${escapeHtml(trialLabel)}` : ''}`
+      : `${escapeHtml(billing.planLabel || billing.plan)} · ${usage}/${limit} managed devices`;
+  } else {
+    return '';
+  }
+
+  return `<div class="billing-banner ${tone}" role="status">${message}</div>`;
+}
+
 function renderApp() {
   setAuthMode(false);
   const org = state.me.organization?.name || '';
@@ -412,6 +450,7 @@ function renderApp() {
   sessionLabel.innerHTML = `<strong>${escapeHtml(org)}</strong><br>${escapeHtml(user)} · ${escapeHtml(state.me.role)}`;
   app.innerHTML = `
     <div class="app-chrome">
+      ${billingBannerHtml()}
       <div class="nav-row">
         <nav class="tabs" aria-label="Sections">
           <button type="button" data-tab="dashboard" class="${state.tab === 'dashboard' ? 'active' : ''}">Dashboard</button>
@@ -1889,6 +1928,9 @@ function renderImportMapping(mapping, users) {
 }
 
 function renderImportPreview(preview) {
+  const overageNote = preview.summary?.billingWarning
+    ? `<p class="billing-overage" role="status">${escapeHtml(preview.summary.billingWarning)}</p>`
+    : '';
   return `
     <section class="panel">
       <h2>Preview ${escapeHtml(String(preview.source || '').toUpperCase())}</h2>
@@ -1897,6 +1939,7 @@ function renderImportPreview(preview) {
         ${preview.summary.reassign || 0} reassign · ${preview.summary.needsReview || 0} need review ·
         ${preview.summary.skip} skip · ${preview.summary.warnings} with warnings
       </p>
+      ${overageNote}
       <div class="actions">
         <button id="applyImport" class="primary" type="button">Apply selected rows</button>
         <button id="selectImportAll" type="button">Select all valid</button>
@@ -2962,7 +3005,36 @@ function splitList(value, separator = /[,;]+/) {
 
 function renderAccount() {
   const organizationName = state.me.organization?.name || '';
+  const billing = state.billing || state.me.billing || {};
+  const plans = billing.plans || [];
   document.querySelector('#tabContent').innerHTML = `
+    <section class="panel">
+      <h2>Plan &amp; usage</h2>
+      <p class="lede">
+        Managed (non-retired) devices are the billing metric. Payments are invoiced
+        manually for early customers — no card required in-app.
+      </p>
+      <dl class="billing-facts">
+        <div><dt>Plan</dt><dd>${escapeHtml(billing.planLabel || billing.plan || 'trial')}</dd></div>
+        <div><dt>Status</dt><dd>${escapeHtml(billing.status || 'trial')}</dd></div>
+        <div><dt>Usage</dt><dd>${escapeHtml(billing.deviceUsage ?? 0)} / ${escapeHtml(billing.deviceLimit ?? '—')} devices</dd></div>
+        ${billing.trialEndsAt ? `<div><dt>Trial ends</dt><dd>${escapeHtml(new Date(billing.trialEndsAt).toLocaleString())}</dd></div>` : ''}
+        ${billing.billingEmail ? `<div><dt>Billing email</dt><dd>${escapeHtml(billing.billingEmail)}</dd></div>` : ''}
+      </dl>
+      ${plans.length ? `
+        <h3 class="subhead">Public price list</h3>
+        <ul class="plan-list">
+          ${plans.map((plan) => `
+            <li>
+              <strong>${escapeHtml(plan.label)}</strong>
+              · up to ${escapeHtml(plan.deviceLimit)} devices
+              · ${plan.priceMonthlyEur == null ? 'custom' : `€${escapeHtml(plan.priceMonthlyEur)}/mo`}
+              <span class="muted"> — ${escapeHtml(plan.headline)}</span>
+            </li>
+          `).join('')}
+        </ul>
+      ` : ''}
+    </section>
     <section class="panel">
       <h2>Change password</h2>
       <p class="lede">Changing it signs out every other device immediately.</p>

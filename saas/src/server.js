@@ -66,6 +66,16 @@ import { canStoreCredentials, decryptCredentials, encryptCredentials } from './c
 import { assetsCsv, buildReportRows, reportTypes, rowsToCsv } from './reports.js';
 import { createImportPolicy } from '../../src/import/import-policy.js';
 import { isWarrantyExpiringWithinDays } from '../../src/utils/asset-model-label.js';
+import {
+  PLANS,
+  annotateImportOverage,
+  assertWithinPlan,
+  defaultTrialEndsAt,
+  listPublicPlans,
+  normalizeBillingRow,
+  paymentRequired,
+  suspendedBlocksMutation
+} from './plans.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -150,6 +160,10 @@ async function handleApi(req, res, url) {
     return sendJson(res, await readiness());
   }
 
+  if (method === 'GET' && path === '/api/plans') {
+    return sendJson(res, { plans: listPublicPlans(), metric: 'managed_devices' });
+  }
+
   if (method === 'POST' && path === '/api/auth/register') {
     if (!allowRegistration) {
       const error = new Error('Self-service registration is disabled. Ask for an invitation.');
@@ -192,9 +206,14 @@ async function handleApi(req, res, url) {
   }
 
   const session = await requireSession(req);
+  await enforceBillingAccess(req, session);
 
   if (method === 'GET' && path === '/api/me') {
     return sendJson(res, await getMe(session));
+  }
+
+  if (method === 'GET' && path === '/api/billing') {
+    return sendJson(res, await getBilling(session.organizationId));
   }
 
   if (method === 'POST' && path === '/api/auth/switch-organization') {
@@ -685,6 +704,22 @@ async function requireSession(req) {
   };
 }
 
+/**
+ * Suspended orgs stay readable (including CSV export). Mutations return 402 so
+ * the client can show billing copy instead of a generic auth failure.
+ */
+async function enforceBillingAccess(req, session) {
+  if (!suspendedBlocksMutation(req.method)) return;
+  const billing = await loadOrganizationBilling(session.organizationId);
+  if (billing.status !== 'suspended') return;
+  throw paymentRequired('Organization billing is suspended. Export and read-only access remain available.', {
+    plan: billing.plan,
+    status: billing.status,
+    deviceUsage: billing.deviceUsage,
+    deviceLimit: billing.deviceLimit
+  });
+}
+
 function sendAuthJson(req, res, payload, status = 200) {
   if (payload?.token) setSessionCookie(req, res, payload.token);
   return sendJson(res, payload, status);
@@ -809,11 +844,15 @@ async function register(input) {
   const membershipId = randomUUID();
   const slug = await uniqueSlug(slugify(orgName));
 
+  const trialEndsAt = defaultTrialEndsAt(new Date(now));
+  const trialLimit = PLANS.trial.deviceLimit;
+
   await db.transaction(async (tx) => {
     await tx.run(`
-      INSERT INTO organizations (id, name, slug, created_at)
-      VALUES (?, ?, ?, ?)
-    `, [orgId, orgName, slug, now]);
+      INSERT INTO organizations (
+        id, name, slug, created_at, plan, status, device_limit, trial_ends_at, billing_email
+      ) VALUES (?, ?, ?, ?, 'trial', 'trial', ?, ?, ?)
+    `, [orgId, orgName, slug, now, trialLimit, trialEndsAt, email]);
 
     await tx.run(`
       INSERT INTO users (id, email, name, password_hash, created_at)
@@ -839,7 +878,7 @@ async function register(input) {
   return {
     token,
     user: { id: userId, email, name },
-    organization: { id: orgId, name: orgName }
+    organization: { id: orgId, name: orgName, plan: 'trial', status: 'trial', deviceLimit: trialLimit, trialEndsAt }
   };
 }
 
@@ -888,12 +927,54 @@ async function getMe(session) {
   const user = await db.get('SELECT id, email, name FROM users WHERE id = ?', [session.userId]);
   const org = await db.get('SELECT id, name, slug FROM organizations WHERE id = ?', [session.organizationId]);
   if (!user || !org) throw unauthorized();
+  const billing = await getBilling(session.organizationId);
   return {
     user,
-    organization: org,
+    organization: {
+      id: org.id,
+      name: org.name,
+      slug: org.slug,
+      plan: billing.plan,
+      status: billing.status,
+      deviceLimit: billing.deviceLimit,
+      trialEndsAt: billing.trialEndsAt
+    },
     organizations: await listUserOrganizations(session.userId),
-    role: session.role
+    role: session.role,
+    billing
   };
+}
+
+async function loadOrganizationBilling(organizationId) {
+  const row = await db.get(`
+    SELECT plan, status, device_limit, trial_ends_at, billing_email
+    FROM organizations
+    WHERE id = ?
+  `, [organizationId]);
+  if (!row) throw notFound('Organization not found');
+  const billing = normalizeBillingRow(row);
+  const deviceUsage = await countManagedDevices(organizationId);
+  return { ...billing, deviceUsage };
+}
+
+async function getBilling(organizationId) {
+  const billing = await loadOrganizationBilling(organizationId);
+  return {
+    ...billing,
+    plans: listPublicPlans(),
+    metric: 'managed_devices',
+    metricLabel: 'Managed (non-retired) devices'
+  };
+}
+
+async function countManagedDevices(organizationId) {
+  const row = await db.get(`
+    SELECT COUNT(*) AS count
+    FROM assets
+    WHERE organization_id = ?
+      AND LOWER(COALESCE(status, '')) <> 'retired'
+  `, [organizationId]);
+  return Number(row?.count || 0);
 }
 
 async function listUserOrganizations(userId) {
@@ -1826,6 +1907,8 @@ async function createAsset(organizationId, input) {
   const assetTag = clean(input.assetTag);
   const serialNumber = clean(input.serialNumber);
   if (!assetTag || !serialNumber) throw badRequest('assetTag and serialNumber are required');
+  const billing = await loadOrganizationBilling(organizationId);
+  assertWithinPlan(billing, billing.deviceUsage, { adding: 1 });
   const now = new Date().toISOString();
   const id = randomUUID();
   const personId = clean(input.personId) || null;
@@ -1989,6 +2072,9 @@ async function createImportPreview(session, upload) {
   if (preview.needsMapping) {
     return preview;
   }
+
+  const billing = await loadOrganizationBilling(session.organizationId);
+  preview.summary = annotateImportOverage(preview.summary, billing, billing.deviceUsage);
 
   const saveAsProfile = clean(upload.fields.saveAsProfile);
   let profileId = preview.profileId || '';

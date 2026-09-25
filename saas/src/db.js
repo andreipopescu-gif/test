@@ -24,6 +24,12 @@ async function openSqlite(dbPath) {
   mkdirSync(dirname(dbPath), { recursive: true });
   const raw = new DatabaseSync(dbPath);
   raw.exec('PRAGMA foreign_keys = ON;');
+  raw.exec('PRAGMA busy_timeout = 5000;');
+  try {
+    raw.exec('PRAGMA journal_mode = WAL;');
+  } catch {
+    // Some environments refuse WAL; continue with the default journal.
+  }
   const adapter = {
     dialect: 'sqlite',
     async get(sql, params = []) {

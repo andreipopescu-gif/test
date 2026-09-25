@@ -162,6 +162,14 @@ STAGING_URL=https://your-staging-host npm run check:staging
 Publishing requires access to the chosen provider account; no credentials are
 stored in this repository.
 
+## Pricing & entitlements
+
+Plans meter **managed (non-retired) devices**. Trial orgs get 14 days / 50
+devices; Starter and Team prices and limits live in `src/plans.js` and
+[docs/PRICING.md](docs/PRICING.md). There is no Stripe yet — set a customer’s
+plan with `npm run set-plan`. `GET /api/billing` returns usage; suspended orgs
+keep read/export and get 402 on writes.
+
 ## Branch workflow
 
 - `local` — offline server app (`src/`, `public/`, Windows deploy)
