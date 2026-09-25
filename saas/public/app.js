@@ -625,7 +625,7 @@ async function renderIssues() {
           ${list.map((item) => issueRow(item, canAct)).join('')}
         </ul>
       </section>
-    `).join('') : '<section class="panel"><p class="empty">Nothing matches. Good.</p></section>'}
+    `).join('') : issuesEmptyState(filter, canAct, summary)}
   `;
 
   document.querySelector('#issueFilters').addEventListener('change', (event) => {
@@ -668,6 +668,7 @@ async function renderIssues() {
   });
   document.querySelectorAll('[data-issue-open-asset]').forEach((button) => {
     button.addEventListener('click', async () => {
+      state.editingAsset = '';
       state.viewingAsset = await api(`/api/assets/${button.dataset.issueOpenAsset}`);
       state.tab = 'assets';
       renderApp();
@@ -675,11 +676,33 @@ async function renderIssues() {
   });
   document.querySelectorAll('[data-issue-open-person]').forEach((button) => {
     button.addEventListener('click', async () => {
+      state.editingPerson = '';
       state.viewingPerson = await api(`/api/people/${button.dataset.issueOpenPerson}/overview`);
       state.tab = 'people';
       renderApp();
     });
   });
+}
+
+function issuesEmptyState(filter, canAct, summary) {
+  const narrowed = Boolean(filter.rule || filter.severity || filter.assignee || (filter.status && filter.status !== 'active'));
+  const openCount = summary?.open ?? 0;
+  if (!narrowed && openCount === 0) {
+    return `
+      <section class="panel empty-state">
+        <h2>No open issues</h2>
+        <p class="lede">Directory, MDM and inventory agree right now. Import or sync again after changes, or re-check manually.</p>
+        ${canAct ? '<p class="muted">Tip: use <strong>Re-check now</strong> after an import if the list looks stale.</p>' : ''}
+      </section>
+    `;
+  }
+  return `
+    <section class="panel empty-state">
+      <h2>Nothing matches these filters</h2>
+      <p class="lede">${openCount ? `There ${openCount === 1 ? 'is' : 'are'} still ${openCount} open issue(s) outside this view.` : 'Try clearing a filter or switching Status back to “Open and snoozed”.'}</p>
+      <p class="muted">Adjust Status, Rule, Severity or Assignee above.</p>
+    </section>
+  `;
 }
 
 function issueRow(item, canAct) {
@@ -1189,14 +1212,13 @@ function renderAssets() {
         <table>
           <thead><tr><th>Tag</th><th>Serial</th><th>Model</th><th>Assigned to</th><th>Status</th><th></th></tr></thead>
           <tbody>
-            ${visible.map((asset) => (
-              asset.id === state.editingAsset ? assetEditRow(asset) : assetRow(asset)
-            )).join('') || '<tr><td colspan="6" class="empty">No devices match.</td></tr>'}
+            ${visible.map((asset) => assetRow(asset)).join('') || '<tr><td colspan="6" class="empty">No devices match.</td></tr>'}
           </tbody>
         </table>
       </div>
     </section>
-    ${state.viewingAsset ? assetDetailPanel(state.viewingAsset) : ''}
+    ${state.viewingAsset ? assetDetailModal(state.viewingAsset) : ''}
+    ${state.editingAsset ? assetEditModal(state.assets.find((asset) => asset.id === state.editingAsset)) : ''}
   `;
   document.querySelector('#assetForm')?.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -1227,14 +1249,12 @@ function renderAssets() {
   });
   document.querySelectorAll('[data-view-asset]').forEach((button) => {
     button.addEventListener('click', async () => {
+      state.editingAsset = '';
       state.viewingAsset = await api(`/api/assets/${button.dataset.viewAsset}`);
       renderApp();
     });
   });
-  document.querySelector('#closeAssetDetail')?.addEventListener('click', () => {
-    state.viewingAsset = null;
-    renderApp();
-  });
+  bindAssetModalChrome();
   document.querySelectorAll('[data-download]').forEach((button) => {
     button.addEventListener('click', () => downloadCsv(button.dataset.download, button.dataset.file));
   });
@@ -1250,6 +1270,7 @@ function renderAssets() {
   });
   document.querySelectorAll('[data-edit-asset]').forEach((button) => {
     button.addEventListener('click', () => {
+      state.viewingAsset = null;
       state.editingAsset = button.dataset.editAsset;
       renderApp();
     });
@@ -1263,15 +1284,38 @@ function renderAssets() {
     await loadData();
     renderApp();
   });
-  document.querySelector('#assetEditCancel')?.addEventListener('click', () => {
-    state.editingAsset = '';
-    renderApp();
-  });
   document.querySelectorAll('[data-del-asset]').forEach((button) => {
     button.addEventListener('click', async () => {
+      if (!confirm('Delete this device from inventory? Assignment history is removed with it.')) return;
       await api(`/api/assets/${button.dataset.delAsset}`, { method: 'DELETE' });
+      if (state.viewingAsset?.id === button.dataset.delAsset) state.viewingAsset = null;
+      if (state.editingAsset === button.dataset.delAsset) state.editingAsset = '';
       await loadData();
       renderApp();
+    });
+  });
+}
+
+function bindAssetModalChrome() {
+  const closeView = () => {
+    state.viewingAsset = null;
+    renderApp();
+  };
+  const closeEdit = () => {
+    state.editingAsset = '';
+    renderApp();
+  };
+  document.querySelectorAll('[data-close-asset-view]').forEach((button) => {
+    button.addEventListener('click', closeView);
+  });
+  document.querySelectorAll('[data-close-asset-edit]').forEach((button) => {
+    button.addEventListener('click', closeEdit);
+  });
+  document.querySelectorAll('[data-modal-dismiss="asset-view"], [data-modal-dismiss="asset-edit"]').forEach((node) => {
+    node.addEventListener('click', (event) => {
+      if (event.target !== node) return;
+      if (node.dataset.modalDismiss === 'asset-view') closeView();
+      if (node.dataset.modalDismiss === 'asset-edit') closeEdit();
     });
   });
 }
@@ -1298,7 +1342,7 @@ function assetRow(asset) {
         ${asset.importMeta?.missingFromLastImport ? '<span class="badge service">missing from MDM</span>' : ''}
       </td>
       <td class="row-actions">
-        <button type="button" data-view-asset="${asset.id}">Open</button>
+        <button type="button" data-view-asset="${asset.id}">View</button>
         ${canWrite() ? `
           <button type="button" data-edit-asset="${asset.id}">Edit</button>
           <button type="button" class="danger" data-del-asset="${asset.id}">Delete</button>
@@ -1386,7 +1430,7 @@ async function promptAddCatalogModel() {
   }
 }
 
-function assetDetailPanel(asset) {
+function assetDetailModal(asset) {
   const fields = [
     ['Serial', asset.serialNumber],
     ['Model', asset.modelName || asset.model?.name],
@@ -1409,70 +1453,80 @@ function assetDetailPanel(asset) {
   const customEntries = Object.entries(asset.custom || {});
 
   return `
-    <section class="panel">
-      <div class="page-head">
-        <div>
-          <h2>${escapeHtml(asset.assetTag)}</h2>
-          <p class="lede">${escapeHtml(asset.person
-            ? `Assigned to ${asset.person.firstName} ${asset.person.lastName}`
-            : 'Unassigned')}</p>
+    <div class="modal-backdrop" data-modal-dismiss="asset-view" role="presentation">
+      <div class="modal-dialog modal-dialog-wide" role="dialog" aria-modal="true" aria-labelledby="assetViewTitle">
+        <div class="page-head">
+          <div>
+            <h2 id="assetViewTitle">${escapeHtml(asset.assetTag)}</h2>
+            <p class="lede">${escapeHtml(asset.person
+              ? `Assigned to ${asset.person.firstName} ${asset.person.lastName}`
+              : 'Unassigned')}</p>
+          </div>
+          <button type="button" data-close-asset-view class="ghost">Close</button>
         </div>
-        <button type="button" id="closeAssetDetail" class="ghost">Close</button>
-      </div>
-      <dl class="detail-grid">
-        ${fields.map(([label, value]) => `
-          <div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>
-        `).join('')}
-        ${customEntries.map(([key, value]) => `
-          <div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd></div>
-        `).join('')}
-      </dl>
-      <h3>Sources</h3>
-      <p class="presence">${escapeHtml(presenceLine(asset.sourcePresence, { lastSeenAt: asset.lastSeenAt }))}</p>
-      <h3>Open issues</h3>
-      ${exceptionsListHtml(asset.exceptions)}
-      <h3>Identity in other systems</h3>
-      ${externalIds.length
-        ? `<dl class="detail-grid">${externalIds.map(([key, value]) => `
+        <dl class="detail-grid">
+          ${fields.map(([label, value]) => `
+            <div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>
+          `).join('')}
+          ${customEntries.map(([key, value]) => `
             <div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd></div>
-          `).join('')}</dl>`
-        : '<p class="muted">No external ids recorded.</p>'}
-      <h3>Import</h3>
-      ${asset.importMeta?.source
-        ? `<p class="muted">
-            ${escapeHtml(asset.importMeta.source)} ·
-            last seen ${escapeHtml(String(asset.importMeta.lastImportedAt || '').slice(0, 10))}
-            ${asset.importMeta.lastImportFile ? `· ${escapeHtml(asset.importMeta.lastImportFile)}` : ''}
-            ${asset.importMeta.missingFromLastImport ? '· <strong>missing from the last import</strong>' : ''}
-          </p>`
-        : '<p class="muted">Added manually.</p>'}
-      <h3>Assignment history</h3>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>From</th><th>To</th><th>Person</th><th>Source</th><th>Reason</th></tr></thead>
-          <tbody>
-            ${asset.assignments.map((item) => `
-              <tr>
-                <td>${escapeHtml(String(item.startedAt || '').slice(0, 10))}</td>
-                <td>${escapeHtml(item.endedAt ? String(item.endedAt).slice(0, 10) : 'open')}</td>
-                <td>${escapeHtml(item.person
-                  ? `${item.person.firstName} ${item.person.lastName}`
-                  : '—')}</td>
-                <td>${escapeHtml(item.source || '')}</td>
-                <td>${escapeHtml(item.endReason || '')}</td>
-              </tr>
-            `).join('') || '<tr><td colspan="5" class="empty">Never assigned.</td></tr>'}
-          </tbody>
-        </table>
+          `).join('')}
+        </dl>
+        <h3>Sources</h3>
+        <p class="presence">${escapeHtml(presenceLine(asset.sourcePresence, { lastSeenAt: asset.lastSeenAt }))}</p>
+        <h3>Open issues</h3>
+        ${exceptionsListHtml(asset.exceptions)}
+        <h3>Identity in other systems</h3>
+        ${externalIds.length
+          ? `<dl class="detail-grid">${externalIds.map(([key, value]) => `
+              <div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd></div>
+            `).join('')}</dl>`
+          : '<p class="muted">No external ids recorded.</p>'}
+        <h3>Import</h3>
+        ${asset.importMeta?.source
+          ? `<p class="muted">
+              ${escapeHtml(asset.importMeta.source)} ·
+              last seen ${escapeHtml(String(asset.importMeta.lastImportedAt || '').slice(0, 10))}
+              ${asset.importMeta.lastImportFile ? `· ${escapeHtml(asset.importMeta.lastImportFile)}` : ''}
+              ${asset.importMeta.missingFromLastImport ? '· <strong>missing from the last import</strong>' : ''}
+            </p>`
+          : '<p class="muted">Added manually.</p>'}
+        <h3>Assignment history</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>From</th><th>To</th><th>Person</th><th>Source</th><th>Reason</th></tr></thead>
+            <tbody>
+              ${(asset.assignments || []).map((item) => `
+                <tr>
+                  <td>${escapeHtml(String(item.startedAt || '').slice(0, 10))}</td>
+                  <td>${escapeHtml(item.endedAt ? String(item.endedAt).slice(0, 10) : 'open')}</td>
+                  <td>${escapeHtml(item.person
+                    ? `${item.person.firstName} ${item.person.lastName}`
+                    : '—')}</td>
+                  <td>${escapeHtml(item.source || '')}</td>
+                  <td>${escapeHtml(item.endReason || '')}</td>
+                </tr>
+              `).join('') || '<tr><td colspan="5" class="empty">Never assigned.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </section>
+    </div>
   `;
 }
 
-function assetEditRow(asset) {
+function assetEditModal(asset) {
+  if (!asset) return '';
   return `
-    <tr>
-      <td colspan="6">
+    <div class="modal-backdrop" data-modal-dismiss="asset-edit" role="presentation">
+      <div class="modal-dialog modal-dialog-wide" role="dialog" aria-modal="true" aria-labelledby="assetEditTitle">
+        <div class="page-head">
+          <div>
+            <h2 id="assetEditTitle">Edit device</h2>
+            <p class="lede">${escapeHtml(asset.assetTag)} · ${escapeHtml(asset.serialNumber || '')}</p>
+          </div>
+          <button type="button" data-close-asset-edit class="ghost">Close</button>
+        </div>
         <form id="assetEditForm" class="grid">
           <label>Asset tag <input name="assetTag" value="${escapeHtml(asset.assetTag)}" required></label>
           <label>Serial <input name="serialNumber" value="${escapeHtml(asset.serialNumber)}" required></label>
@@ -1498,11 +1552,11 @@ function assetEditRow(asset) {
           ${customFieldsInputs('asset', asset.custom || asset)}
           <div class="actions span-all">
             <button class="primary" type="submit">Save</button>
-            <button type="button" id="assetEditCancel">Cancel</button>
+            <button type="button" data-close-asset-edit>Cancel</button>
           </div>
         </form>
-      </td>
-    </tr>
+      </div>
+    </div>
   `;
 }
 
