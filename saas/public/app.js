@@ -38,7 +38,7 @@ let lastImportFile = null;
 boot();
 
 async function boot() {
-  const inviteToken = new URLSearchParams(location.search).get('invite');
+  const inviteToken = readInviteToken();
   if (inviteToken) return renderInvitation(inviteToken);
   if (!state.token) return renderAuth();
   try {
@@ -50,6 +50,14 @@ async function boot() {
     localStorage.removeItem('saas.token');
     renderAuth();
   }
+}
+
+function readInviteToken() {
+  const fromQuery = new URLSearchParams(location.search).get('invite');
+  if (fromQuery) return fromQuery;
+  const hash = String(location.hash || '').replace(/^#/, '');
+  const params = new URLSearchParams(hash.includes('=') ? hash : '');
+  return params.get('invite') || '';
 }
 
 function setAuthMode(enabled) {
@@ -2055,6 +2063,10 @@ async function renderSettings() {
     settings = await api('/api/settings');
     if (!target || state.tab !== 'settings') return;
   }
+  if (state.settingsTab === 'privacy') {
+    settings = await api('/api/settings');
+    if (!target || state.tab !== 'settings') return;
+  }
 
   const tabs = [
     ['catalog', 'Catalog'],
@@ -2062,6 +2074,7 @@ async function renderSettings() {
     ['custom-fields', 'Custom fields'],
     ['import-rules', 'Import rules'],
     ['import-profiles', 'Import profiles'],
+    ['privacy', 'Privacy'],
     ['rules', 'Issue rules'],
     ['connections', 'Connections']
   ];
@@ -2086,6 +2099,7 @@ async function renderSettings() {
     ${state.settingsTab === 'custom-fields' ? renderSettingsCustomFields(canEdit) : ''}
     ${state.settingsTab === 'import-rules' ? renderSettingsImportRules(settings, canEdit) : ''}
     ${state.settingsTab === 'import-profiles' ? renderSettingsImportProfiles(canEdit) : ''}
+    ${state.settingsTab === 'privacy' ? renderSettingsPrivacy(settings, canEdit) : ''}
   `;
 
   document.querySelectorAll('[data-settings-tab]').forEach((button) => {
@@ -2100,6 +2114,7 @@ async function renderSettings() {
   wireSettingsCustomFields(canEdit);
   wireSettingsImportRules(canEdit);
   wireSettingsImportProfiles(canEdit);
+  wireSettingsPrivacy(canEdit);
 }
 
 async function renderSettingsIntegrations(canEdit) {
@@ -2110,6 +2125,7 @@ async function renderSettingsIntegrations(canEdit) {
   const tabs = [
     ['catalog', 'Catalog'], ['options', 'Options'], ['custom-fields', 'Custom fields'],
     ['import-rules', 'Import rules'], ['import-profiles', 'Import profiles'],
+    ['privacy', 'Privacy'],
     ['rules', 'Issue rules'], ['connections', 'Connections']
   ];
   target.innerHTML = `
@@ -2927,6 +2943,121 @@ function wireSettingsImportProfiles(canEdit) {
       await api(`/api/import/profiles/${button.dataset.deleteProfile}`, { method: 'DELETE' });
       await reload('Profile deleted.');
     });
+  });
+}
+
+function renderSettingsPrivacy(settings, canEdit) {
+  const retention = settings.retention || {};
+  const readonlyAttr = canEdit ? '' : 'readonly';
+  return `
+    <section class="panel">
+      <div class="page-head">
+        <div>
+          <h2>Privacy & retention</h2>
+          <p class="lede">
+            Deleting a person scrubs their e-mail and name from import previews,
+            issues and audit details. Retention drops stale import copies and old
+            audit rows — run it here or with <code>npm run retention:cleanup</code>.
+          </p>
+        </div>
+      </div>
+      <form id="privacyForm" class="grid">
+        <label>Preview retention (days)
+          <input name="previewDays" type="number" min="1" max="3650" value="${escapeHtml(retention.previewDays ?? 7)}" ${canEdit ? '' : 'disabled'}>
+        </label>
+        <label>Import retention (days)
+          <input name="importDays" type="number" min="1" max="3650" value="${escapeHtml(retention.importDays ?? 30)}" ${canEdit ? '' : 'disabled'}>
+        </label>
+        <label>Audit retention (days)
+          <input name="auditDays" type="number" min="1" max="3650" value="${escapeHtml(retention.auditDays ?? 365)}" ${canEdit ? '' : 'disabled'}>
+        </label>
+        <label class="span-all checkbox-row">
+          <input type="checkbox" name="scrubAppliedImportRows" ${retention.scrubAppliedImportRows === false ? '' : 'checked'} ${canEdit ? '' : 'disabled'}>
+          Scrub raw row payloads on applied imports (keep keys only)
+        </label>
+        ${canEdit ? `
+          <div class="actions span-all">
+            <button class="primary" type="submit">Save retention</button>
+            <button type="button" id="runRetentionBtn">Run cleanup now</button>
+          </div>
+        ` : ''}
+      </form>
+      <p id="privacyResult" class="muted"></p>
+    </section>
+    ${state.me.role === 'admin' ? `
+      <section class="panel">
+        <h2>Export organization data</h2>
+        <p class="lede">
+          Download a JSON copy of people, devices, assignments, settings, issues
+          and members. Connector secrets are never included.
+        </p>
+        <div class="actions">
+          <button type="button" class="primary" id="exportOrgBtn">Download JSON export</button>
+        </div>
+        <p id="exportOrgResult" class="muted"></p>
+      </section>
+    ` : ''}
+  `;
+}
+
+function wireSettingsPrivacy(canEdit) {
+  if (state.settingsTab !== 'privacy') return;
+  const result = document.querySelector('#privacyResult');
+
+  document.querySelector('#privacyForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!canEdit) return;
+    const form = event.currentTarget;
+    try {
+      const data = new FormData(form);
+      await api('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          retention: {
+            previewDays: Number(data.get('previewDays')),
+            importDays: Number(data.get('importDays')),
+            auditDays: Number(data.get('auditDays')),
+            scrubAppliedImportRows: data.get('scrubAppliedImportRows') === 'on'
+          }
+        })
+      });
+      result.textContent = 'Retention settings saved.';
+      result.className = 'ok-text';
+    } catch (error) {
+      result.textContent = error.message;
+      result.className = 'error';
+    }
+  });
+
+  document.querySelector('#runRetentionBtn')?.addEventListener('click', async () => {
+    try {
+      const summary = await api('/api/privacy/retention/run', { method: 'POST', body: '{}' });
+      result.textContent = `Cleanup done: ${summary.previewBatchesDeleted} preview batch(es), ${summary.importBatchesDeleted} import batch(es), ${summary.importRowsScrubbed} row(s) scrubbed, ${summary.auditDeleted} audit row(s).`;
+      result.className = 'ok-text';
+    } catch (error) {
+      result.textContent = error.message;
+      result.className = 'error';
+    }
+  });
+
+  document.querySelector('#exportOrgBtn')?.addEventListener('click', async () => {
+    const exportResult = document.querySelector('#exportOrgResult');
+    try {
+      const payload = await api('/api/organizations/current/export');
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0, 10);
+      link.href = url;
+      link.download = `organization-export-${stamp}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      exportResult.textContent = `Exported ${payload.people.length} people and ${payload.assets.length} devices.`;
+      exportResult.className = 'ok-text';
+    } catch (error) {
+      exportResult.textContent = error.message;
+      exportResult.className = 'error';
+    }
   });
 }
 
