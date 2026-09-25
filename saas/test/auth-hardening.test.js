@@ -10,7 +10,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const saasDir = join(__dirname, '..');
 
 test('a production host does not open registration by itself', { timeout: 20_000 }, async () => {
-  await withServer({ NODE_ENV: 'production' }, async (baseUrl) => {
+  await withServer({
+    NODE_ENV: 'production',
+    SAAS_PUBLIC_URL: 'https://inventory.example.eu'
+  }, async (baseUrl) => {
     const response = await post(baseUrl, '/api/auth/register', {
       orgName: 'Walk In',
       email: 'walkin@example.test',
@@ -21,7 +24,11 @@ test('a production host does not open registration by itself', { timeout: 20_000
 });
 
 test('a registration token provisions a pilot without opening the host', { timeout: 20_000 }, async () => {
-  await withServer({ NODE_ENV: 'production', SAAS_REGISTRATION_TOKEN: 'pilot-token' }, async (baseUrl) => {
+  await withServer({
+    NODE_ENV: 'production',
+    SAAS_REGISTRATION_TOKEN: 'pilot-token',
+    SAAS_PUBLIC_URL: 'https://inventory.example.eu'
+  }, async (baseUrl) => {
     const rejected = await post(baseUrl, '/api/auth/register', {
       orgName: 'No Token',
       email: 'notoken@example.test',
@@ -60,10 +67,75 @@ test('invitation links come from the configured public URL, not the Host header'
     });
     assert.equal(response.status, 201);
     const invitation = await response.json();
-    assert.match(invitation.inviteUrl, /^https:\/\/inventory\.example\.eu\/\?invite=/);
+    assert.match(invitation.inviteUrl, /^https:\/\/inventory\.example\.eu\/#invite=/);
   });
 });
 
+test('login sets an HttpOnly session cookie that authorises without Bearer', { timeout: 20_000 }, async () => {
+  await withServer({}, async (baseUrl) => {
+    const registered = await post(baseUrl, '/api/auth/register', {
+      orgName: 'Cookie Co',
+      email: 'admin@cookie.test',
+      password: 'password-cookie'
+    });
+    assert.equal(registered.status, 201);
+    const setCookie = registered.headers.getSetCookie?.() || [];
+    const session = setCookie.find((value) => value.startsWith('saas_session='));
+    assert.ok(session, 'register must Set-Cookie saas_session');
+    assert.match(session, /HttpOnly/i);
+    assert.match(session, /SameSite=Strict/i);
+
+    const me = await fetch(`${baseUrl}/api/me`, {
+      headers: { Cookie: session.split(';')[0] }
+    });
+    assert.equal(me.status, 200);
+    const body = await me.json();
+    assert.equal(body.user.email, 'admin@cookie.test');
+
+    const blocked = await fetch(`${baseUrl}/api/people`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: session.split(';')[0],
+        Origin: 'https://evil.example'
+      },
+      body: JSON.stringify({ firstName: 'X', lastName: 'Y' })
+    });
+    assert.equal(blocked.status, 401);
+  });
+});
+
+test('production refuses to boot without SAAS_PUBLIC_URL', { timeout: 20_000 }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'itinv-saas-public-url-'));
+  const port = 19_000 + Math.floor(Math.random() * 1_000);
+  const child = spawn(process.execPath, ['src/server.js'], {
+   cwd: saasDir,
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      SAAS_PUBLIC_URL: '',
+      SAAS_ALLOW_REGISTRATION: 'false',
+      PORT: String(port),
+      HOST: '127.0.0.1',
+      SAAS_DB_PATH: join(dir, 'saas.sqlite'),
+      SAAS_JWT_SECRET: 'auth-hardening-test-secret'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let output = '';
+  child.stderr.on('data', (chunk) => { output += chunk; });
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  const code = await new Promise((resolve) => {
+    child.on('exit', resolve);
+    setTimeout(() => {
+      child.kill();
+      resolve('timeout');
+    }, 5_000);
+  });
+  await rm(dir, { recursive: true, force: true });
+  assert.notEqual(code, 0);
+  assert.match(output, /SAAS_PUBLIC_URL/);
+});
 // A missing account used to skip password hashing entirely, so the response
 // time said whether an address was registered here.
 test('an unknown email costs the same as a wrong password', { timeout: 30_000 }, async () => {

@@ -94,7 +94,7 @@ test('two organizations stay isolated through CRUD, roles and CSV import', { tim
       token: orgA.token,
       body: { email: readerEmail, role: 'readonly' }
     });
-    const invitationToken = new URL(readonlyInvite.inviteUrl).searchParams.get('invite');
+    const invitationToken = inviteTokenFromUrl(readonlyInvite.inviteUrl);
     const reader = await jsonRequest(baseUrl, '/api/invitations/accept', {
       method: 'POST',
       body: { token: invitationToken, name: 'Read Only', password: 'password-reader' }
@@ -114,7 +114,7 @@ test('two organizations stay isolated through CRUD, roles and CSV import', { tim
     await jsonRequest(baseUrl, '/api/invitations/accept', {
       method: 'POST',
       body: {
-        token: new URL(multiOrgInvite.inviteUrl).searchParams.get('invite'),
+        token: inviteTokenFromUrl(multiOrgInvite.inviteUrl),
         password: 'password-alpha'
       }
     });
@@ -214,6 +214,13 @@ test('two organizations stay isolated through CRUD, roles and CSV import', { tim
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+function inviteTokenFromUrl(inviteUrl) {
+  const url = new URL(inviteUrl);
+  return url.searchParams.get('invite')
+    || new URLSearchParams(String(url.hash || '').replace(/^#/, '')).get('invite')
+    || '';
+}
 
 async function waitForHealth(baseUrl) {
   for (let attempt = 0; attempt < 50; attempt += 1) {
