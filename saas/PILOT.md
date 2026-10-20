@@ -1,5 +1,7 @@
 # MVP pilot runbook
 
+Sales outreach kit (10 prospecti, emailuri, pipeline): [docs/GTM/](docs/GTM/).
+
 ## Automated gate
 
 Run before every pilot:
