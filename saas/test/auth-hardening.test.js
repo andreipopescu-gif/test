@@ -60,7 +60,7 @@ test('invitation links come from the configured public URL, not the Host header'
     });
     assert.equal(response.status, 201);
     const invitation = await response.json();
-    assert.match(invitation.inviteUrl, /^https:\/\/inventory\.example\.eu\/\?invite=/);
+    assert.match(invitation.inviteUrl, /^https:\/\/inventory\.example\.eu\/#invite=/);
   });
 });
 

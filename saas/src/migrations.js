@@ -458,6 +458,12 @@ export const sqliteMigrations = [
         UNIQUE (organization_id, provider)
       );
     `
+  },
+  {
+    version: 8,
+    sql: `
+      ALTER TABLE organization_settings ADD COLUMN retention_json TEXT NOT NULL DEFAULT '{}';
+    `
   }
 ];
 
@@ -689,6 +695,12 @@ export const postgresMigrations = [
         updated_at TEXT NOT NULL,
         UNIQUE (organization_id, provider)
       );
+    `
+  },
+  {
+    version: 8,
+    sql: `
+      ALTER TABLE organization_settings ADD COLUMN IF NOT EXISTS retention_json TEXT NOT NULL DEFAULT '{}';
     `
   }
 ];

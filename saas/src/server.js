@@ -45,6 +45,13 @@ import {
   validateStatus
 } from './options.js';
 import {
+  DEFAULT_RETENTION,
+  erasePerson,
+  exportOrganization,
+  normalizeRetention,
+  runRetentionCleanup
+} from './privacy.js';
+import {
   createImportProfile,
   deleteImportProfile,
   listImportProfiles,
@@ -213,6 +220,24 @@ async function handleApi(req, res, url) {
   if (method === 'DELETE' && path === '/api/organizations/current') {
     requireRole(session, ['admin']);
     return sendJson(res, await deleteCurrentOrganization(session, await readJson(req)));
+  }
+
+  if (method === 'GET' && path === '/api/organizations/current/export') {
+    requireRole(session, ['admin']);
+    const payload = await exportOrganization(db, session.organizationId);
+    if (!payload) throw notFound('Organization not found');
+    await addAudit(session, 'organization.export', 'organization', session.organizationId, {
+      people: payload.people.length,
+      assets: payload.assets.length
+    });
+    return sendJson(res, payload);
+  }
+
+  if (method === 'POST' && path === '/api/privacy/retention/run') {
+    requireRole(session, ['admin']);
+    const summary = await runRetentionCleanup(db, { organizationId: session.organizationId });
+    await addAudit(session, 'privacy.retention_run', 'organization', session.organizationId, summary);
+    return sendJson(res, summary);
   }
 
   if (path === '/api/audit' && method === 'GET') {
@@ -588,10 +613,12 @@ async function handleApi(req, res, url) {
   if (method === 'DELETE' && path.startsWith('/api/people/')) {
     requireRole(session, ['admin', 'it']);
     const id = path.split('/')[3];
-    await deletePerson(session.organizationId, id);
-    await addAudit(session, 'person.delete', 'person', id);
+    const erased = await deletePerson(session.organizationId, id);
+    await addAudit(session, 'person.erase', 'person', id, {
+      scrubbed: erased?.scrubbed || null
+    });
     await refreshExceptions(session);
-    return sendJson(res, { ok: true, id });
+    return sendJson(res, { ok: true, id, scrubbed: erased?.scrubbed || null });
   }
 
   if (path === '/api/assets') {
@@ -868,7 +895,8 @@ async function createInvitation(session, input, req) {
     email,
     role,
     expiresAt,
-    inviteUrl: `${inviteBaseUrl(req)}/?invite=${encodeURIComponent(token)}`
+    // Fragment keeps the bearer token out of access logs and Referer history.
+    inviteUrl: `${inviteBaseUrl(req)}/#invite=${encodeURIComponent(token)}`
   };
 }
 
@@ -992,10 +1020,15 @@ async function removeMember(session, userId) {
     await deleteUserWithoutOrganizations(tx, userId);
   });
   await addAudit(session, 'member.remove', 'user', userId, {
-    email: removed?.email || '',
-    role: membership.role
+    role: membership.role,
+    emailDomain: domainOf(removed?.email || '')
   });
   return { ok: true, id: userId };
+}
+
+function domainOf(email) {
+  const at = String(email).lastIndexOf('@');
+  return at >= 0 ? String(email).slice(at + 1).toLowerCase() : '';
 }
 
 async function isLastAdmin(organizationId) {
@@ -1222,11 +1255,9 @@ async function updatePerson(organizationId, id, input) {
 }
 
 async function deletePerson(organizationId, id) {
-  const result = await db.run(
-    'DELETE FROM people WHERE id = ? AND organization_id = ?',
-    [id, organizationId]
-  );
-  if (!result.changes) throw notFound('Person not found');
+  const erased = await erasePerson(db, organizationId, id);
+  if (!erased) throw notFound('Person not found');
+  return erased;
 }
 
 /**
@@ -2528,14 +2559,16 @@ async function getOrganizationSettings(organizationId) {
       excludedEmails: [],
       excludedNameRules: [],
       identityGroups: [],
-      modelOverrides: {}
+      modelOverrides: {},
+      retention: { ...DEFAULT_RETENTION }
     };
   }
   return {
     excludedEmails: parseJson(row.excluded_emails_json, []),
     excludedNameRules: parseJson(row.excluded_name_rules_json, []),
     identityGroups: parseJson(row.identity_groups_json, []),
-    modelOverrides: parseJson(row.model_overrides_json, {})
+    modelOverrides: parseJson(row.model_overrides_json, {}),
+    retention: normalizeRetention(parseJson(row.retention_json, {}))
   };
 }
 
@@ -2562,19 +2595,23 @@ async function updateOrganizationSettings(session, input) {
       : before.identityGroups,
     modelOverrides: input.modelOverrides && typeof input.modelOverrides === 'object'
       ? { ...input.modelOverrides }
-      : before.modelOverrides
+      : before.modelOverrides,
+    retention: input.retention && typeof input.retention === 'object'
+      ? normalizeRetention(input.retention)
+      : before.retention
   };
   const now = new Date().toISOString();
   await db.run(`
     INSERT INTO organization_settings (
       organization_id, excluded_emails_json, excluded_name_rules_json,
-      identity_groups_json, model_overrides_json, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?)
+      identity_groups_json, model_overrides_json, retention_json, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (organization_id) DO UPDATE SET
       excluded_emails_json = ?,
       excluded_name_rules_json = ?,
       identity_groups_json = ?,
       model_overrides_json = ?,
+      retention_json = ?,
       updated_at = ?
   `, [
     session.organizationId,
@@ -2582,11 +2619,13 @@ async function updateOrganizationSettings(session, input) {
     JSON.stringify(next.excludedNameRules),
     JSON.stringify(next.identityGroups),
     JSON.stringify(next.modelOverrides),
+    JSON.stringify(next.retention),
     now,
     JSON.stringify(next.excludedEmails),
     JSON.stringify(next.excludedNameRules),
     JSON.stringify(next.identityGroups),
     JSON.stringify(next.modelOverrides),
+    JSON.stringify(next.retention),
     now
   ]);
   await addAudit(session, 'settings.update', 'organization', session.organizationId, {

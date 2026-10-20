@@ -11,6 +11,7 @@
     "test:postgres": "node --test test/postgres.test.js test/multitenant-import.test.js test/exception-api.test.js",
     "pilot:validate": "node --test test/multitenant-import.test.js",
     "backup": "node scripts/backup.js",
+    "retention:cleanup": "node scripts/retention-cleanup.js",
     "check:staging": "node scripts/check-staging.js",
     "seed:test": "node scripts/seed-test-env.js",
     "seed:demo": "node scripts/seed-demo-issues.js",

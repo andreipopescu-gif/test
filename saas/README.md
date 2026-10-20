@@ -73,6 +73,10 @@ so every rule has an example.
 - Audit log for mutations, assignments and imports
 - Self-service password change that ends every other session
 - Organization deletion that removes its data and orphaned accounts
+- Privacy controls: person erasure with PII scrubbing, organization JSON
+  export, configurable retention cleanup (`npm run retention:cleanup`), invite
+  tokens in URL fragments — see `docs/PRIVACY.md`, `docs/DPA.md`,
+  `docs/SUBPROCESSORS.md`
 - SQLite locally; PostgreSQL on staging/production
 - Health and database readiness checks
 
@@ -116,6 +120,9 @@ to use PostgreSQL instead.
 | `DATABASE_URL` | empty | PostgreSQL connection URL |
 | `DATABASE_SSL` | `false` | Enable TLS for an external PostgreSQL endpoint |
 | `SAAS_CONNECTOR_KEY` | empty | Encrypts connector credentials; without it credentials cannot be saved |
+
+Privacy retention defaults (override in Settings → Privacy): preview batches 7
+days, applied imports 30 days, audit logs 365 days.
 
 `SAAS_JWT_SECRET` is mandatory everywhere, not only in production: a shared
 default would let anyone mint a token for any organization.
