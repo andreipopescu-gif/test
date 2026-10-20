@@ -14,7 +14,9 @@
     "check:staging": "node scripts/check-staging.js",
     "seed:test": "node scripts/seed-test-env.js",
     "seed:demo": "node scripts/seed-demo-issues.js",
-    "reset:test": "node scripts/reset-test-env.js"
+    "reset:test": "node scripts/reset-test-env.js",
+    "outreach:dry": "node scripts/send-outreach.js --dry-run --all",
+    "outreach:send": "node scripts/send-outreach.js --all"
   },
   "dependencies": {
     "pg": "^8.16.3"
