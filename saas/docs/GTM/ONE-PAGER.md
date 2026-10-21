@@ -23,6 +23,14 @@ Directory (Entra) spune una. MDM (Jamf / Intune) spune alta. Excel-ul spune a tr
 
 **Nimic nu se scrie înapoi în Entra sau Jamf** — IT rămâne la control.
 
+## Ce nu suntem (ca să nu ne confunde)
+
+- **Virima / Lansweeper** — CMDB + discovery de infrastructură
+- **Workwize / Firstbase** — logistics (cumpără / livrează / recuperează laptopuri)
+- **Noi** — Issues între Entra și MDM (adevărul de ownership, azi)
+
+Detalii: [COMPETITIVE.md](COMPETITIVE.md).
+
 ## Pilot 2 săptămâni
 
 1. Conectezi Entra (sau un export users)
