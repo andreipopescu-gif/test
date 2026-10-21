@@ -12,6 +12,7 @@ Owner: Andrei Popescu.
 | [emails/](emails/) | 10 drafturi personalizate (RO) |
 | [linkedin/](linkedin/) | Mesaje scurte LinkedIn |
 | [FOLLOW-UPS.md](FOLLOW-UPS.md) | Secvență D+3 / D+7 / D+14 |
+| [COMPETITIVE.md](COMPETITIVE.md) | Virima / Workwize / Korvini — ce spunem |
 | `../../scripts/send-outreach.js` | Trimite via Resend când ai API key |
 
 ## Cum trimiți (3 variante)
